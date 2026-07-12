@@ -49,16 +49,27 @@ ANCHOR_PEAKS = {
     "246d5775": "boi_taull",   # Pica de Cervi
     "4d04de5e": "la_molina",   # La Tosa d'Alp
 }
-# Zone id inside the all-zones response -> station. The endpoint uses its
-# OWN 7-zone scheme (ids 1,3-8; names in the payload), NOT the allaus/BPA
-# zones the handoff assumed — the old boi_taull id (3) was actually
-# "Vessant nord Pirineu oriental". Observed 2026-07-12:
-#   1 Vessant nord Pirineu occidental (Aran)          -> baqueira
-#   5 Vessant sud Pirineu occidental (Ribagorçana)    -> boi_taull
-#   6 Vessant sud Prepirineu oriental (Cadí-Moixeró?) -> la_molina
-#     PROVISIONAL — no zones-metadades endpoint exists; cross-check against
-#     the la-tosa-dalp pics forecast on the first winter payload.
-ZONE_STATIONS = {1: "baqueira", 5: "boi_taull", 6: "la_molina"}
+# Zone names as served by the API on 2026-07-12 (truncated at ~25 chars BY
+# THE API — the official docs example shows the same truncation). The
+# endpoint uses its OWN 7-zone scheme, NOT the allaus/BPA zones the handoff
+# assumed. Zonal rows are stored under `zona_<id>` pseudo-stations — the
+# resort -> zone assignment is interpretation, and lives in config.py
+# (METEOCAT_ZONE_FOR_STATION) where it can be revised without re-ingesting.
+# If the API ever renames/renumbers zones, ingest alerts (name drift).
+EXPECTED_ZONE_NAMES = {
+    1: "Vessant nord Pirineu occi",
+    3: "Vessant nord Pirineu orie",
+    4: "Pirineu oriental",
+    5: "Vessant sud Pirineu occid",
+    6: "Vessant sud Prepirineu or",
+    7: "Prepirineu occidental",
+    8: "Vessant sud Pirineu orien",
+}
+
+
+def zone_station(id_zona: int) -> str:
+    """Pseudo-station name under which a zone's rows are stored."""
+    return f"zona_{id_zona}"
 
 WEEK_SECONDS = 7 * 24 * 3600
 
@@ -135,7 +146,13 @@ def parse_meteocat(payload: bytes, run_time_utc: str, name: str) -> List[db.Row]
 
 
 def _parse_zones(body: dict, run_time_utc: str, target_date: str) -> List[db.Row]:
-    """One row per (zone-of-interest, franja, variable-with-a-valor).
+    """One row per (zone, franja, variable-with-a-valor), for ALL zones.
+
+    Zones are stored under `zona_<id>` pseudo-stations: the payload is the
+    only authority on zones, and which zone represents which resort is a
+    revisable config decision (config.METEOCAT_ZONE_FOR_STATION), verified
+    against accumulated data by verify_meteocat_zones.py — nothing is lost
+    if the assignment turns out wrong.
 
     valid_time is the franja window START on the target date, taken at face
     value from the payload's own "Z" suffix (dataPrediccio is "<date>Z");
@@ -154,15 +171,38 @@ def _parse_zones(body: dict, run_time_utc: str, target_date: str) -> List[db.Row
         start, span = window
         valid = f"{target_date}T{start:02d}:00Z"
         for zone in franja.get("zones") or []:
-            station = ZONE_STATIONS.get(zone.get("idZona"))
-            if station is None:
+            id_zona = zone.get("idZona")
+            if not isinstance(id_zona, int):
                 continue
             for var in zone.get("variablesValors") or []:
                 value = _as_float(var.get("valor"))
                 if var.get("nom") and value is not None:
-                    rows.append((SOURCE, station, run_time_utc, valid,
-                                 f"zonal.{var['nom']}.{span}h", value))
+                    rows.append((SOURCE, zone_station(id_zona), run_time_utc,
+                                 valid, f"zonal.{var['nom']}.{span}h", value))
     return rows
+
+
+def check_zone_names(body: dict) -> List[str]:
+    """Compare the payload's zone id->nom pairs against EXPECTED_ZONE_NAMES.
+
+    Returns human-readable drift messages (empty = all as expected). A
+    renamed or renumbered zone would silently corrupt the resort->zone
+    assignment, so ingest alerts on any drift.
+    """
+    problems = []
+    seen = {}
+    for franja in (body.get("franjes") or []) if isinstance(body, dict) else []:
+        for zone in franja.get("zones") or []:
+            if isinstance(zone.get("idZona"), int):
+                seen[zone["idZona"]] = zone.get("nom")
+    for id_zona, nom in sorted(seen.items()):
+        expected = EXPECTED_ZONE_NAMES.get(id_zona)
+        if expected is None:
+            problems.append(f"unknown zone id {id_zona} ({nom!r})")
+        elif nom != expected:
+            problems.append(f"zone {id_zona} renamed: {nom!r} "
+                            f"(expected {expected!r})")
+    return problems
 
 
 def _parse_pic(body, run_time_utc: str, station: str,
@@ -237,7 +277,11 @@ def main() -> None:
         name = f"zones_{d.isoformat()}.json"
         body = _get(f"/pronostic/v1/pirineu/{d.year}/{d.month:02d}/{d.day:02d}")
         archive_payload(SOURCE, name, body, fetched_at)
-        rows.extend(_parse_zones(json.loads(body), run_time, d.isoformat()))
+        parsed = json.loads(body)
+        for problem in check_zone_names(parsed):
+            send_alert(f"meteocat zone scheme drift ({d.isoformat()}): "
+                       f"{problem} — review METEOCAT_ZONE_FOR_STATION")
+        rows.extend(_parse_zones(parsed, run_time, d.isoformat()))
 
     pic_dates = [today]
     if os.environ.get("METEOCAT_PICS_TOMORROW") == "1":

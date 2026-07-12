@@ -26,9 +26,9 @@ def zones_payload() -> bytes:
                       {"nom": "acumulacioNeu", "valor": "12", "periode": 2},
                       {"nom": "comentari", "periode": 2},
                   ]},
-                 {"idZona": 99, "nom": "Zona desconeguda",
+                 {"idZona": 4, "nom": "Pirineu oriental",
                   "variablesValors": [
-                      {"nom": "acumulacioNeu", "valor": "99", "periode": 2},
+                      {"nom": "acumulacioNeu", "valor": "20", "periode": 2},
                   ]},
              ]},
             # real-payload quirk: "06:00 - 12:00h" (no h on the first time)
@@ -66,20 +66,39 @@ def pic_payload() -> bytes:
     ]).encode("utf-8")
 
 
-def test_zone_rows_use_franja_windows_and_skip_valueless_variables():
+def test_zone_rows_store_every_zone_with_franja_windows():
     rows = mc._parse_zones(json.loads(zones_payload()), RUN, "2026-07-13")
-    assert {r[1] for r in rows} == {"baqueira", "boi_taull", "la_molina"}
+    # ALL zones are kept (resort assignment is config, not parsing) —
+    # including ids the current mapping doesn't use (zona_4 here).
+    assert {r[1] for r in rows} == {"zona_1", "zona_4", "zona_5", "zona_6"}
 
-    baqueira = {r[4]: r[5] for r in rows if r[1] == "baqueira"}
-    assert baqueira == {"zonal.acumulacio.24h": 5.0,
-                        "zonal.acumulacioNeu.24h": 12.0}
-    assert all(r[3] == "2026-07-13T00:00Z" for r in rows if r[1] == "baqueira")
+    z1 = {r[4]: r[5] for r in rows if r[1] == "zona_1"}
+    assert z1 == {"zonal.acumulacio.24h": 5.0,
+                  "zonal.acumulacioNeu.24h": 12.0}
+    assert all(r[3] == "2026-07-13T00:00Z" for r in rows if r[1] == "zona_1")
 
-    boi = {r[4]: r[5] for r in rows if r[1] == "boi_taull"}
+    z5 = {r[4]: r[5] for r in rows if r[1] == "zona_5"}
     # comentari (text) and acumulacio-without-valor yield no rows
-    assert boi == {"zonal.cel.6h": 3.0, "zonal.cota.6h": 1800.0,
-                   "zonal.probabilitat.6h": 1.0}
-    assert all(r[3] == "2026-07-13T06:00Z" for r in rows if r[1] == "boi_taull")
+    assert z5 == {"zonal.cel.6h": 3.0, "zonal.cota.6h": 1800.0,
+                  "zonal.probabilitat.6h": 1.0}
+    assert all(r[3] == "2026-07-13T06:00Z" for r in rows if r[1] == "zona_5")
+
+
+def test_zone_name_drift_is_detected():
+    body = json.loads(zones_payload())
+    assert mc.check_zone_names(body) == []  # fixture uses the real names
+    body["franjes"][0]["zones"][0]["nom"] = "Zona renombrada"
+    body["franjes"][1]["zones"][1]["idZona"] = 99
+    problems = mc.check_zone_names(body)
+    assert any("renamed" in p for p in problems)
+    assert any("unknown zone id 99" in p for p in problems)
+
+
+def test_configured_zones_exist_in_the_observed_scheme():
+    from config import METEOCAT_ZONE_FOR_STATION, RESORTS
+    assert set(METEOCAT_ZONE_FOR_STATION) == {r["station"] for r in RESORTS}
+    for zone_id in METEOCAT_ZONE_FOR_STATION.values():
+        assert zone_id in mc.EXPECTED_ZONE_NAMES
 
 
 def test_franja_window_falls_back_to_idTipusFranja():

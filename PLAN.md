@@ -38,23 +38,42 @@ Protects irreplaceable data — everything else can be rebuilt from it.
       resolves open question 2; findings recorded under "Open questions"
       below and in `data/aemet_recon_report.json`. Headline: the GeoTIFFs
       are colormapped RGBA images, values only recoverable as legend bins.
-- [ ] Refine Meteocat parsers against real payload shapes
-      (done 2026-07-12: franja windows, variablesValors, zone scheme fix,
-      per-cota pics) — re-verify the winter-only fields (acumulacioNeu,
-      cota with valor; la_molina zone id) on the first snowfall payload
-- [ ] AEMET ingest leg: GeoTIFF pixel extraction + wind GeoJSON → SQLite.
-      Now shaped by the recon: decode pixel RGBA → bin via the embedded
-      `ESCALA` GDAL tag per file (values are BINS, e.g. precip 0.5–1 mm,
-      not continuous); nearest `ang_viento` GeoJSON point for direction;
-      fetch each run within its ~6 h cycle (no retention).
+- [x] Refine Meteocat parsers against real payload shapes
+      (2026-07-12: franja windows, variablesValors string valors, per-cota
+      pics). Zone mapping REDONE from scratch the same day: the endpoint
+      uses its own 7-zone scheme and provides NO geometry, so zonal rows
+      are now stored for ALL zones under `zona_<id>` pseudo-stations and
+      the resort→zone assignment is pure config
+      (`config.METEOCAT_ZONE_FOR_STATION`), revisable without re-ingest.
+      Ingest alerts on zone rename/renumber drift.
+- [ ] Confirm the resort→zone assignment on winter data
+      (`verify_meteocat_zones.py`: ranks zones by how well their
+      `zonal.cota` tracks each anchor peak's isozero — no API calls).
+      baqueira→1 and boi_taull→5 are well supported; la_molina→6 is LOW
+      confidence (zones 4/8 plausible). Also re-verify the winter-only
+      fields (acumulacioNeu/cota valors) and their units then.
+- [x] AEMET ingest leg (`aemet_ingest.py`, 2026-07-12): fetches the
+      latest-run tar.gz once per cycle (skips an already-ingested run),
+      archives the tar, decodes per-resort pixels RGBA→bin via each file's
+      `ESCALA` GDAL tag (values are BINS, e.g. precip 0.5–1 mm →
+      midpoint; open top bin and transparent zero → lower edge), nearest
+      `ang_viento` GeoJSON point for wind direction. 11 variables/resort:
+      temperature, wind speed/direction, precip 1/3/6 h, cloud cover, and
+      neutral f207/f228 until a winter run confirms their semantics.
+      Wired into rebuild_db.py; cron.example slot at 03/09/15/21 UTC.
 - [ ] Normalization + elevation-semantics layer (canonical unit, windows,
       bucket mapping, base/mid/top per resort) — resolves open questions 4–5
       (`normalize.py` has the SWE-mm unit, 24/48 h windows and provisional
       elevation bands; Meteocat zonal categorical codes — cel, intensitat,
-      probabilitat, tempesta, visibilitat — now flow into SQLite as numeric
-      codes awaiting the bucket map; AEMET snow ratio still open)
+      probabilitat, tempesta, visibilitat — flow into SQLite as numeric
+      codes awaiting the bucket map; AEMET precip bins are liquid mm =
+      SWE mm by definition, but the snow/ratio question now hinges on
+      what f207 turns out to be)
 
-## Milestone 3: v1 complete
+## Milestone 3: v1 complete — ON HOLD (2026-07-12, user decision)
+Do not start until Milestone 2 closes properly: the winter-blocked
+verifications above (la_molina zone, acumulacioNeu/cota units, f207/f228
+semantics) and the normalization layer come first.
 All acceptance checks in the project brief pass.
 - [ ] Regime-weighted consensus (N flows → AROME; S/E flows → AEMET+Meteocat)
       per forecast block, all 3 resorts
@@ -100,6 +119,12 @@ All acceptance checks in the project brief pass.
     the zero bin renders transparent (alpha 0). Consensus inputs from
     AEMET are therefore binned, not continuous. Mandatory attribution
     ships in the `USO` tag.
+- Meteocat zone for la_molina: 6 (Prepirineu or.) vs 4 (Pirineu or.) vs 8
+  (Vessant sud Pirineu or.) — the API has no zone geometry and meteo.cat /
+  apidocs / SMC-adjacent sites are unreachable from the dev environment
+  (WAF). All zones are stored, so this costs nothing while open; resolve
+  with `verify_meteocat_zones.py` on winter data, or by checking the zone
+  map at meteo.cat/prediccio/pirineu from a browser.
 - XEMA station selection per resort + gauge undercatch handling (20–50%)
 - Semantic normalization spec (SWE mm proposal, windows, bucket mapping,
   snow ratio)

@@ -9,6 +9,8 @@ Usage: python rebuild_db.py [--db PATH]   (default: data/rebuild.sqlite)
 import argparse
 
 import db
+from aemet_ingest import SOURCE as AEMET_SOURCE
+from aemet_ingest import parse_aemet
 from archive import iter_archived, run_time_from_path
 from config import DATA_DIR
 from meteocat_ingest import SOURCE as METEOCAT_SOURCE
@@ -17,10 +19,10 @@ from openmeteo_ingest import SOURCE as OPENMETEO_SOURCE
 from openmeteo_ingest import parse_openmeteo
 
 # One entry per ingestion leg: fn(payload, run_time_utc, archive_name).
-# The AEMET leg joins once aemet_recon.py answers open question 2.
 PARSERS = {
     OPENMETEO_SOURCE: lambda raw, run, name: parse_openmeteo(raw, run),
     METEOCAT_SOURCE: parse_meteocat,
+    AEMET_SOURCE: parse_aemet,
 }
 
 

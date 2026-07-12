@@ -13,7 +13,11 @@ corrected with XEMA observations, with Alta/Mitjana/Baixa confidence labels.
 - Rebuild SQLite from the raw archive: `python rebuild_db.py [--db PATH]`
 - Silent-failure watchdog: `python healthcheck.py` (alerts and exits 1 on stale data)
 - Test the alert webhook: `python alerting.py "message"` (uses `ALERT_WEBHOOK_URL`)
+- Ingest AEMET leg: `python aemet_ingest.py` (latest Harmonie run only;
+  re-runs of the same run are skipped)
 - Verify Meteocat historics: `python verify_meteocat_historics.py` (requires `METEOCAT_API_KEY`)
+- Verify resort→zone assignment against accumulated data (no API calls):
+  `python verify_meteocat_zones.py` (needs winter payloads to conclude)
 - AEMET server reconnaissance: `python aemet_recon.py` (optionally
   `AEMET_DOWNLOAD_URL=<url captured from the viewer>`; rasterio enables
   raster inspection)
@@ -74,7 +78,14 @@ TBD). Rationale: `docs/adr/0001-initial-stack.md` — don't repeat it here.
   never design anything that assumes past forecasts are refetchable.
 - The zonal endpoint uses its OWN 7-zone scheme (ids 1,3–8; the payload's
   `nom` is authoritative), NOT the allaus/BPA zones — mapping ids from the
-  BPA legend put Boí Taüll in the wrong zone once already.
+  BPA legend put Boí Taüll in the wrong zone once already. The API exposes
+  NO zone geometry, so zonal rows are stored for ALL zones (`zona_<id>`
+  pseudo-stations) and the resort→zone choice lives in
+  `config.METEOCAT_ZONE_FOR_STATION` — change the config, never the
+  parser, and run `verify_meteocat_zones.py` before trusting it.
+- meteo.cat, apidocs.meteocat.gencat.cat and SMC-adjacent sites are
+  unreachable from this dev environment (WAF blocks non-browser agents);
+  only api.meteo.cat works. Don't burn time retrying them.
 - Meteocat zonal values live in `variablesValors[].valor` as STRINGS
   (categorical codes and numbers alike); `periode` is metadata, and summer
   payloads simply omit `valor` for the snow fields — a missing valor is

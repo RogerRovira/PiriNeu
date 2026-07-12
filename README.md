@@ -18,19 +18,21 @@ Early development — v1 in progress. See [PLAN.md](PLAN.md).
 ## Quick start
 ```bash
 pip install -r requirements.txt
-python openmeteo_ingest.py     # ingest the Open-Meteo/AROME leg (archives raw first)
+python openmeteo_ingest.py     # Open-Meteo/AROME leg (archives raw first)
+python meteocat_ingest.py      # Meteocat leg (needs METEOCAT_API_KEY)
+python aemet_ingest.py         # AEMET Harmonie leg (latest run only)
 python rebuild_db.py           # prove SQLite rebuilds from the raw archive
 pytest                         # run the test suite
 ```
 Scheduling and failure alerting: see [cron.example](cron.example).
-Secrets (e.g. `METEOCAT_API_KEY`, arriving with Milestone 2) live in env
-vars — never commit them.
+Secrets (e.g. `METEOCAT_API_KEY`) live in env vars — never commit them.
 
 ## Features (v1)
 - 48h new-snow and snow-line forecast per resort
 - Confidence labels (Alta/Mitjana/Baixa) computed from inter-model spread
 - Nowcast correction from live XEMA observations
-- Three independent ingestion legs with raw-payload archiving
+- Three independent ingestion legs with raw-payload archiving ✅
+  (Open-Meteo/AROME, Meteocat zonal+pics, AEMET Harmonie GeoTIFF/GeoJSON)
 - Read-only dashboard with full source attribution
 
 ## Tech

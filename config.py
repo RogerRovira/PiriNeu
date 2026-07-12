@@ -25,6 +25,27 @@ RESORTS = (
     {"station": "la_molina", "lat": 42.3205751, "lon": 1.8926609, "elevation_m": 2526},
 )
 
+# Which Meteocat Pirineu forecast zone represents each resort. Zonal rows
+# are stored per-zone (station `zona_<id>`, see meteocat_ingest.py), so this
+# assignment is pure interpretation: revising it needs no re-ingest.
+# The API offers no zone geometry (no zones metadades endpoint; docs/site
+# unreachable from the dev environment), so this is assembled from the
+# payload's own zone names + published descriptions of the zone scheme, and
+# is verified against accumulated data by verify_meteocat_zones.py:
+# - baqueira -> 1 "Vessant nord Pirineu occidental": Baqueira/Cap de
+#   Vaquèira is in Naut Aran; the north-slope zone covers Val d'Aran and
+#   the north rim of Pallars Sobirà/Alta Ribagorça. Note the resort's
+#   Bonaigua sector sits on the divide itself. Confidence: high.
+# - boi_taull -> 5 "Vessant sud Pirineu occidental": the zone explicitly
+#   covers the Barravés and BOÍ valley heads (plus upper Vall Fosca and
+#   northern Pallars valley heads). Confidence: high.
+# - la_molina -> 6 "Vessant sud Prepirineu oriental": Tosa d'Alp belongs to
+#   the Cadí-Moixeró-Tosa alignment (eastern Prepirineu) and this scheme has
+#   no north-Prepirineu zone; but zones 4 "Pirineu oriental" and 8 "Vessant
+#   sud Pirineu oriental" are plausible alternatives. Confidence: LOW —
+#   confirm with verify_meteocat_zones.py once winter payloads accumulate.
+METEOCAT_ZONE_FOR_STATION = {"baqueira": 1, "boi_taull": 5, "la_molina": 6}
+
 # Cap on new (uncached) HTTP calls per process run.
 MAX_NEW_CALLS = int(os.environ.get("MAX_NEW_CALLS", "50"))
 # How long a cached HTTP response (success or failure) stays fresh.
