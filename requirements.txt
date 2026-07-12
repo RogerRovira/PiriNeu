@@ -4,6 +4,6 @@ requests>=2.31
 # Tests
 pytest>=8
 
-# Optional until the AEMET leg lands: rasterio (raster inspection in
-# aemet_recon.py and, later, GeoTIFF pixel extraction), pyproj (only if the
-# recon shows a non-WGS84 CRS)
+# AEMET leg: RGBA GeoTIFF decoding (recon confirmed EPSG:4326 — pyproj
+# not needed)
+rasterio>=1.3

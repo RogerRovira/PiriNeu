@@ -1,0 +1,184 @@
+# Data acquisition on GitHub Actions (ADR-0002) — replaces the planned
+# Raspberry Pi + cron deployment. One hourly workflow runs every leg on its
+# own rhythm (gated by UTC hour) and commits the results to the `datastore`
+# branch: raw archive (source of truth), SQLite view, HTTP cache (protects
+# the Meteocat quota across runners) and alert log.
+#
+# Repository secrets used (Settings > Secrets and variables > Actions):
+#   METEOCAT_API_KEY   required for the Meteocat leg
+#   ALERT_WEBHOOK_URL  optional, e.g. an https://ntfy.sh/<topic> URL
+#
+# GitHub cron can fire late (typically 5-20 min); hour gates below have
+# that slack in mind. Scheduled workflows are suspended by GitHub after 60
+# days without repository activity — the datastore commits themselves count
+# as activity, but keep an eye on it if ingestion ever pauses.
+name: ingest
+
+on:
+  schedule:
+    - cron: "10 * * * *"
+  workflow_dispatch:
+    inputs:
+      legs:
+        description: >-
+          Comma-separated legs to force (openmeteo,meteocat,aemet,
+          healthcheck) or "auto" for the hour-gated schedule
+        default: auto
+
+# Serialize runs: one writer to the datastore branch at a time.
+concurrency:
+  group: datastore
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      site: ${{ steps.site.outcome }}
+    env:
+      PIRINEU_DATA_DIR: ${{ github.workspace }}/datastore
+      METEOCAT_API_KEY: ${{ secrets.METEOCAT_API_KEY }}
+      ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Check out (or bootstrap) the datastore branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "$url" datastore >/dev/null; then
+            git clone --depth 1 --branch datastore "$url" datastore
+          else
+            git init -b datastore datastore
+            git -C datastore remote add origin "$url"
+            echo "Raw-payload archive + SQLite view (ADR-0002)." > datastore/README.md
+          fi
+
+      - name: Decide which legs run this hour
+        id: legs
+        run: |
+          set -eu
+          legs="${{ github.event.inputs.legs || 'auto' }}"
+          if [ "$legs" = "auto" ]; then
+            hour=$(date -u +%H)
+            legs="openmeteo"                                # source is hourly
+            case "$hour" in
+              13|14) legs="$legs,meteocat" ;;               # publishes ~14:00 local;
+            esac                                            # 2nd slot covers cron lag
+                                                            # (disk cache dedupes calls)
+            case "$hour" in
+              03|09|15|21) legs="$legs,aemet" ;;            # runs 00/06/12/18 UTC + ~2h45m lag
+            esac
+            case "$hour" in
+              08) legs="$legs,healthcheck" ;;               # daily silent-failure watchdog
+            esac
+          fi
+          echo "legs=$legs" >> "$GITHUB_OUTPUT"
+          echo "running: $legs"
+
+      - name: Open-Meteo leg
+        id: openmeteo
+        if: contains(steps.legs.outputs.legs, 'openmeteo')
+        continue-on-error: true
+        run: python openmeteo_ingest.py
+
+      - name: Meteocat leg
+        id: meteocat
+        if: contains(steps.legs.outputs.legs, 'meteocat')
+        continue-on-error: true
+        run: python meteocat_ingest.py
+
+      - name: AEMET leg
+        id: aemet
+        if: contains(steps.legs.outputs.legs, 'aemet')
+        continue-on-error: true
+        run: python aemet_ingest.py
+
+      - name: Healthcheck
+        id: healthcheck
+        if: contains(steps.legs.outputs.legs, 'healthcheck')
+        continue-on-error: true
+        run: python healthcheck.py
+
+      # Consensus rows go into the same SQLite before the datastore commit,
+      # so every blend (and the per-leg inputs behind it) is preserved for
+      # the verification metrics planned in PLAN.md.
+      - name: Build consensus + dashboard (ADR-0003)
+        id: site
+        continue-on-error: true
+        run: |
+          python consensus.py
+          python dashboard.py --out site
+
+      - name: Upload dashboard artifact
+        if: steps.site.outcome == 'success'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Commit the datastore
+        if: always()
+        run: |
+          set -eu
+          cd datastore
+          git add -A
+          if git diff --cached --quiet; then
+            echo "nothing new to commit"
+            exit 0
+          fi
+          git -c user.name="pirineu-ingest" \
+              -c user.email="actions@users.noreply.github.com" \
+              commit -m "ingest ${{ steps.legs.outputs.legs }} $(date -u +%FT%TZ)"
+          # Concurrency serializes writers; the rebase loop is a belt-and-
+          # braces guard against a manual push racing a scheduled one.
+          for i in 1 2 3; do
+            git push origin datastore && exit 0
+            git pull --rebase origin datastore || true
+            sleep $((i * 5))
+          done
+          exit 1
+
+      # continue-on-error above lets every leg and the commit run even when
+      # one source is down; this step still marks the run red so the failure
+      # is visible (and emailed by GitHub) — alerting.py already fired too.
+      - name: Fail the run if any leg failed
+        if: >-
+          steps.openmeteo.outcome == 'failure' ||
+          steps.meteocat.outcome == 'failure' ||
+          steps.aemet.outcome == 'failure' ||
+          steps.healthcheck.outcome == 'failure' ||
+          steps.site.outcome == 'failure'
+        run: |
+          echo "openmeteo=${{ steps.openmeteo.outcome }} meteocat=${{ steps.meteocat.outcome }} aemet=${{ steps.aemet.outcome }} healthcheck=${{ steps.healthcheck.outcome }} site=${{ steps.site.outcome }}"
+          exit 1
+
+  # Separate job so a Pages outage can't fail or re-run ingestion. Runs
+  # whenever the site artifact was built, even if some leg failed.
+  # One-time setup: repo Settings > Pages > Source = "GitHub Actions".
+  deploy-dashboard:
+    needs: ingest
+    if: always() && needs.ingest.outputs.site == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

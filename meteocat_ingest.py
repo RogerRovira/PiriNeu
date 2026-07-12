@@ -12,25 +12,32 @@ Quota discipline (the Predicció plan is tightly capped — see CLAUDE.md):
   METEOCAT_PICS_TOMORROW=1 to add tomorrow (3 extra calls/day)
 Default daily budget: 5 calls (+1 metadades weekly).
 
-Every payload is archived BEFORE parsing. Parsing is deliberately tolerant
-and generic (numeric leaves, deterministic names): the exact response
-schemas are only partially known until real payloads accumulate, and the
-archive — not the parser — is the source of truth. Refine the parser
-later and rebuild with rebuild_db.py.
+Every payload is archived BEFORE parsing; the archive — not the parser —
+is the source of truth. Parsers follow the REAL payload shapes observed
+2026-07-12 (see PLAN.md, Meteocat verification outcome):
+- zonal: {dataPrediccio, dataPublicacio, franjes:[{idTipusFranja, nom,
+  zones:[{idZona, nom, variablesValors:[{nom, valor?, periode}]}]}]}.
+  franjes carry NO date — the window (24h or a 6h block) comes from the
+  franja `nom`; `valor` is a STRING (categorical codes like cel/tempesta,
+  or numbers like cota); variables without `valor` are simply absent that
+  day (e.g. acumulacioNeu in summer).
+- pics: [{data, cotes:[{cota, variables:[{nom, valor}]}]}] with cota in
+  {"totes", "1500", "2000", "2500", "3000"} and numeric valor.
 
 The slugs come from pics/metadades, whose lat/lon are the CANONICAL
-coordinates for ALL sources (gotcha): every run prints them next to the
-config.py placeholders so the swap isn't forgotten.
+coordinates for ALL sources (gotcha): config.py carries them since
+2026-07-12, and every run alerts if the metadades coords ever drift.
 """
 import json
 import os
-from datetime import date, datetime, timedelta, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import db
 from alerting import send_alert
 from archive import archive_payload
-from config import ISO_UTC
+from config import ISO_UTC, RESORTS
 from httpcache import cached_get
 
 SOURCE = "meteocat"
@@ -42,8 +49,27 @@ ANCHOR_PEAKS = {
     "246d5775": "boi_taull",   # Pica de Cervi
     "4d04de5e": "la_molina",   # La Tosa d'Alp
 }
-# Zone id inside the all-zones response -> station
-ZONE_STATIONS = {1: "baqueira", 3: "boi_taull", 6: "la_molina"}
+# Zone names as served by the API on 2026-07-12 (truncated at ~25 chars BY
+# THE API — the official docs example shows the same truncation). The
+# endpoint uses its OWN 7-zone scheme, NOT the allaus/BPA zones the handoff
+# assumed. Zonal rows are stored under `zona_<id>` pseudo-stations — the
+# resort -> zone assignment is interpretation, and lives in config.py
+# (METEOCAT_ZONE_FOR_STATION) where it can be revised without re-ingesting.
+# If the API ever renames/renumbers zones, ingest alerts (name drift).
+EXPECTED_ZONE_NAMES = {
+    1: "Vessant nord Pirineu occi",
+    3: "Vessant nord Pirineu orie",
+    4: "Pirineu oriental",
+    5: "Vessant sud Pirineu occid",
+    6: "Vessant sud Prepirineu or",
+    7: "Prepirineu occidental",
+    8: "Vessant sud Pirineu orien",
+}
+
+
+def zone_station(id_zona: int) -> str:
+    """Pseudo-station name under which a zone's rows are stored."""
+    return f"zona_{id_zona}"
 
 WEEK_SECONDS = 7 * 24 * 3600
 
@@ -63,30 +89,37 @@ def _get(path: str, ttl_seconds: Optional[int] = None) -> bytes:
     return body
 
 
-# --- generic, deterministic flattening -------------------------------------
+# --- value/window helpers ----------------------------------------------------
 
-_SKIP_KEYS = {"idZona"}  # identity fields, not measurements
+def _as_float(valor) -> Optional[float]:
+    """Meteocat sends `valor` as str, int or float; text (comentari) -> None."""
+    if isinstance(valor, bool) or valor is None:
+        return None
+    try:
+        return float(valor)
+    except (TypeError, ValueError):
+        return None
 
 
-def _numeric_leaves(obj, prefix: str = "") -> List[tuple]:
-    """Yield (dotted_name, float) for every numeric leaf, depth-first.
+# Fallback when a franja `nom` is unparseable: idTipusFranja -> (start, span).
+_FRANJA_BY_ID = {1: (0, 6), 2: (6, 6), 3: (12, 6), 4: (18, 6), 5: (0, 24)}
+_FRANJA_RE = re.compile(r"(\d{1,2}):(\d{2})")
 
-    Deterministic for a given payload, so rebuilds reproduce identical rows
-    even though the full Meteocat schema isn't pinned down yet.
+
+def _franja_window(franja: dict) -> Optional[tuple]:
+    """(start_hour, span_hours) of a franja.
+
+    Real `nom` values are inconsistently formatted ("24h", "00:00h - 06:00h",
+    "06:00 - 12:00h") so parse the clock times, falling back to the
+    idTipusFranja mapping observed alongside them.
     """
-    out = []
-    if isinstance(obj, dict):
-        for key in sorted(obj):
-            if key in _SKIP_KEYS:
-                continue
-            name = f"{prefix}.{key}" if prefix else key
-            out.extend(_numeric_leaves(obj[key], name))
-    elif isinstance(obj, list):
-        for i, item in enumerate(obj):
-            out.extend(_numeric_leaves(item, f"{prefix}[{i}]"))
-    elif isinstance(obj, (int, float)) and not isinstance(obj, bool):
-        out.append((prefix, float(obj)))
-    return out
+    nom = str(franja.get("nom") or "")
+    hours = [int(h) for h, _ in _FRANJA_RE.findall(nom)]
+    if len(hours) == 2 and hours[1] > hours[0]:
+        return hours[0], hours[1] - hours[0]
+    if nom.strip() == "24h":
+        return 0, 24
+    return _FRANJA_BY_ID.get(franja.get("idTipusFranja"))
 
 
 # --- parsers (pure: archived payload -> rows) -------------------------------
@@ -113,36 +146,87 @@ def parse_meteocat(payload: bytes, run_time_utc: str, name: str) -> List[db.Row]
 
 
 def _parse_zones(body: dict, run_time_utc: str, target_date: str) -> List[db.Row]:
+    """One row per (zone, franja, variable-with-a-valor), for ALL zones.
+
+    Zones are stored under `zona_<id>` pseudo-stations: the payload is the
+    only authority on zones, and which zone represents which resort is a
+    revisable config decision (config.METEOCAT_ZONE_FOR_STATION), verified
+    against accumulated data by verify_meteocat_zones.py — nothing is lost
+    if the assignment turns out wrong.
+
+    valid_time is the franja window START on the target date, taken at face
+    value from the payload's own "Z" suffix (dataPrediccio is "<date>Z");
+    the window length lives in the variable name (e.g. zonal.cota.6h vs
+    zonal.acumulacioNeu.24h) so the 24h summary never mixes with the blocks.
+    Categorical codes (cel, tempesta, probabilitat…) are stored as their
+    numeric code — the bucket semantics belong to normalize.py.
+    """
     rows: List[db.Row] = []
     if not isinstance(body, dict):
         return rows
-    for i, franja in enumerate(body.get("franjes") or []):
-        valid = franja.get("data") or f"{target_date}[franja{i}]"
+    for franja in body.get("franjes") or []:
+        window = _franja_window(franja)
+        if window is None:
+            continue
+        start, span = window
+        valid = f"{target_date}T{start:02d}:00Z"
         for zone in franja.get("zones") or []:
-            station = ZONE_STATIONS.get(zone.get("idZona"))
-            if station is None:
+            id_zona = zone.get("idZona")
+            if not isinstance(id_zona, int):
                 continue
-            for variable, value in _numeric_leaves(zone):
-                rows.append((SOURCE, station, run_time_utc, str(valid),
-                             f"zonal.{variable}", value))
+            for var in zone.get("variablesValors") or []:
+                value = _as_float(var.get("valor"))
+                if var.get("nom") and value is not None:
+                    rows.append((SOURCE, zone_station(id_zona), run_time_utc,
+                                 valid, f"zonal.{var['nom']}.{span}h", value))
     return rows
+
+
+def check_zone_names(body: dict) -> List[str]:
+    """Compare the payload's zone id->nom pairs against EXPECTED_ZONE_NAMES.
+
+    Returns human-readable drift messages (empty = all as expected). A
+    renamed or renumbered zone would silently corrupt the resort->zone
+    assignment, so ingest alerts on any drift.
+    """
+    problems = []
+    seen = {}
+    for franja in (body.get("franjes") or []) if isinstance(body, dict) else []:
+        for zone in franja.get("zones") or []:
+            if isinstance(zone.get("idZona"), int):
+                seen[zone["idZona"]] = zone.get("nom")
+    for id_zona, nom in sorted(seen.items()):
+        expected = EXPECTED_ZONE_NAMES.get(id_zona)
+        if expected is None:
+            problems.append(f"unknown zone id {id_zona} ({nom!r})")
+        elif nom != expected:
+            problems.append(f"zone {id_zona} renamed: {nom!r} "
+                            f"(expected {expected!r})")
+    return problems
 
 
 def _parse_pic(body, run_time_utc: str, station: str,
                target_date: str) -> List[db.Row]:
+    """One row per (timestep, cota, variable): pic.<nom>.<cota>.
+
+    Real payloads: 8 three-hourly timesteps ("<date>THH:MMZ"), cota "totes"
+    for column variables (isozero, iso-10) and fixed levels 1500/2000/2500/
+    3000 for temperatura/humitat/velocitat vent/direccio vent. Spaces in
+    noms become underscores so variable names stay shell/SQL-friendly.
+    """
     rows: List[db.Row] = []
     if not isinstance(body, list):
         return rows
     for i, point in enumerate(body):
-        valid = point.get("data") or f"{target_date}[t{i}]"
+        valid = str(point.get("data") or f"{target_date}[t{i}]")
         for cota in point.get("cotes") or []:
             level = cota.get("cota") or cota.get("altitud") or "peak"
             for var in cota.get("variables") or []:
-                nom = var.get("nom") or "var"
-                for leaf, value in _numeric_leaves(
-                        {k: v for k, v in var.items() if k != "nom"}):
-                    rows.append((SOURCE, station, run_time_utc, str(valid),
-                                 f"pic.{nom}.{level}.{leaf}", value))
+                value = _as_float(var.get("valor"))
+                if var.get("nom") and value is not None:
+                    nom = str(var["nom"]).replace(" ", "_")
+                    rows.append((SOURCE, station, run_time_utc, valid,
+                                 f"pic.{nom}.{level}", value))
     return rows
 
 
@@ -174,17 +258,30 @@ def main() -> None:
     rows: List[db.Row] = []
 
     slugs = resolve_slugs()
-    print("canonical pics-metadades coords (swap config.py placeholders!):")
+    by_station = {r["station"]: r for r in RESORTS}
     for codi, info in slugs.items():
-        print(f"  {ANCHOR_PEAKS[codi]}: {info['name']} "
-              f"lat={info['lat']} lon={info['lon']} slug={info['slug']}")
+        station = ANCHOR_PEAKS[codi]
+        cfg = by_station[station]
+        # config.py holds the canonical pics-metadades coords; alert on drift
+        # (rounded to 7 decimals there, so tolerate ~a few cm).
+        if (abs(cfg["lat"] - info["lat"]) > 1e-6
+                or abs(cfg["lon"] - info["lon"]) > 1e-6):
+            send_alert(f"meteocat metadades coords for {station} drifted from "
+                       f"config.py: {info['lat']},{info['lon']} "
+                       f"vs {cfg['lat']},{cfg['lon']}")
+        print(f"  {station}: {info['name']} lat={info['lat']} "
+              f"lon={info['lon']} slug={info['slug']}")
 
     zone_dates = [today, today + timedelta(days=1)]
     for d in zone_dates:
         name = f"zones_{d.isoformat()}.json"
         body = _get(f"/pronostic/v1/pirineu/{d.year}/{d.month:02d}/{d.day:02d}")
         archive_payload(SOURCE, name, body, fetched_at)
-        rows.extend(_parse_zones(json.loads(body), run_time, d.isoformat()))
+        parsed = json.loads(body)
+        for problem in check_zone_names(parsed):
+            send_alert(f"meteocat zone scheme drift ({d.isoformat()}): "
+                       f"{problem} — review METEOCAT_ZONE_FOR_STATION")
+        rows.extend(_parse_zones(parsed, run_time, d.isoformat()))
 
     pic_dates = [today]
     if os.environ.get("METEOCAT_PICS_TOMORROW") == "1":

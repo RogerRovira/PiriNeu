@@ -1,3 +1,6 @@
+# SUPERSEDED for deployment by GitHub Actions (ADR-0002,
+# .github/workflows/ingest.yml) — kept as reference for local/manual runs
+# or a future self-hosted fallback.
 # Cron schedule aligned to source rhythms (PLAN.md, Milestone 1).
 # Install on the deploy machine with:  crontab -e   (paths need adjusting).
 # All times are UTC — run `timedatectl set-timezone UTC` on the box or
@@ -21,6 +24,8 @@ PIRINEU=/path/to/PiriNeu
 # sourced by a wrapper) — never inside the repo.
 30 13 * * * cd $PIRINEU && python3 meteocat_ingest.py >> data/logs/cron.log 2>&1
 
-# AEMET leg (uncomment when the script lands after reconnaissance):
-# AEMET publishes at 00/06/12/18 UTC plus lag.
-# 45 1,7,13,19 * * * cd $PIRINEU && python3 aemet_ingest.py >> data/logs/cron.log 2>&1
+# AEMET Harmonie leg — the download server holds ONLY the latest run
+# (recon 2026-07-12: ~2h45m publication lag after 00/06/12/18 UTC, no
+# retention), so fetch once per cycle, after the lag. Re-fetching the same
+# run is skipped by the ingester, so an extra safety slot is cheap.
+0 3,9,15,21 * * * cd $PIRINEU && python3 aemet_ingest.py >> data/logs/cron.log 2>&1

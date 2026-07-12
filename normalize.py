@@ -8,10 +8,14 @@ Status per source (open questions 4-5 in PLAN.md):
   snow:water ratio ("for the water equivalent in millimeter, divide by 7",
   where snowfall is taken in mm) -> SWE mm = cm * 10 / 7. Confirm against
   the precipitation/rain split on the first live payloads.
-- Meteocat: STUB — the zonal endpoint returns precipitation BUCKETS whose
-  mapping to mm needs real payloads (credentials pending).
-- AEMET: STUB — the mm->cm snow ratio question resolves after the
-  aemet_recon.py findings.
+- Meteocat: STUB — real payloads (2026-07-12) show zonal `acumulacio` /
+  `acumulacioNeu` as NUMERIC strings, not buckets, but summer payloads
+  carry no valor for them, so the unit (mm liquid? cm snow?) stays
+  unconfirmed until the first winter payloads.
+- AEMET: recon resolved the precip side — `grid.precip.*` bins are liquid
+  mm, i.e. SWE mm by definition (values are bin midpoints). The snow-
+  specific field is presumed to be code 207 (`grid.f207`, range
+  0.001–0.2, likely metres); STUB until a winter run confirms it.
 
 Elevation bands are provisional public resort figures; the canonical
 base/mid/top mapping across sources lands with the Meteocat leg.
@@ -32,14 +36,16 @@ def openmeteo_snowfall_cm_to_swe_mm(snowfall_cm: float) -> float:
 
 def meteocat_bucket_to_swe_mm(bucket: object) -> Optional[float]:
     raise NotImplementedError(
-        "Meteocat bucket mapping needs real zonal payloads — "
-        "blocked on METEOCAT_API_KEY (PLAN.md open question 4)")
+        "Meteocat zonal acumulacioNeu is numeric but its UNIT is only "
+        "observable on winter payloads — confirm before converting "
+        "(PLAN.md open question 4)")
 
 
 def aemet_snow_mm_to_swe_mm(value_mm: float) -> Optional[float]:
     raise NotImplementedError(
-        "AEMET snow ratio resolves after aemet_recon.py runs "
-        "(PLAN.md open questions 2 and 4)")
+        "AEMET grid.precip.* bins are already liquid mm (= SWE mm), but the "
+        "snow field is presumed grid.f207 with UNCONFIRMED semantics — "
+        "verify on a winter run first (PLAN.md open question 4)")
 
 
 # --- Elevation semantics (provisional, open question 5) --------------------

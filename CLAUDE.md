@@ -13,17 +13,27 @@ corrected with XEMA observations, with Alta/Mitjana/Baixa confidence labels.
 - Rebuild SQLite from the raw archive: `python rebuild_db.py [--db PATH]`
 - Silent-failure watchdog: `python healthcheck.py` (alerts and exits 1 on stale data)
 - Test the alert webhook: `python alerting.py "message"` (uses `ALERT_WEBHOOK_URL`)
+- Ingest AEMET leg: `python aemet_ingest.py` (latest Harmonie run only;
+  re-runs of the same run are skipped)
 - Verify Meteocat historics: `python verify_meteocat_historics.py` (requires `METEOCAT_API_KEY`)
+- Verify resort→zone assignment against accumulated data (no API calls):
+  `python verify_meteocat_zones.py` (needs winter payloads to conclude)
 - AEMET server reconnaissance: `python aemet_recon.py` (optionally
   `AEMET_DOWNLOAD_URL=<url captured from the viewer>`; rasterio enables
   raster inspection)
+- Build the consensus (writes source='consensus' rows): `python consensus.py`
+- Generate the static dashboard: `python dashboard.py [--out DIR]`
 - Tests: `pytest`
 
 ## Stack
 Python 3 · SQLite long format `(station, run_time_utc, valid_time_utc,
-variable, value)` with idempotent upserts · rasterio (+ pyproj if needed)
-for AEMET rasters · cron scheduling · minimal read-only dashboard (tech
-TBD). Rationale: `docs/adr/0001-initial-stack.md` — don't repeat it here.
+variable, value)` with idempotent upserts · rasterio for AEMET rasters ·
+GitHub Actions scheduled ingestion committing to the `datastore` branch
+(raw archive + SQLite + HTTP cache; AEMET rasters cropped to the Pyrenees
+window with a decode-parity guard) · static HTML dashboard built in CI
+and served by GitHub Pages. Rationale: `docs/adr/0001-initial-stack.md`,
+`docs/adr/0002-github-actions-data-acquisition.md` and
+`docs/adr/0003-static-dashboard-github-pages.md` — don't repeat them here.
 
 ## Non-goals — do NOT build these
 - GRIB2 pipelines anywhere — GeoTIFF/GeoJSON/JSON cover everything.
@@ -66,8 +76,29 @@ TBD). Rationale: `docs/adr/0001-initial-stack.md` — don't repeat it here.
   zone parameter exists) — one call serves every resort.
 - `meteocat-openapi.yaml` has inconsistent parameter casing (snake_case vs
   camelCase). That mirrors the real API — preserve as-is.
-- Coordinates/elevations in `openmeteo_ingest.py` are PLACEHOLDERS — replace
-  with canonical pics-metadades coords once Meteocat credentials arrive.
-- AEMET gridded data: use the download server's GeoTIFF/GeoJSON, NOT the
-  OpenData REST API (PNG only). Don't assume the raster CRS is WGS84.
+- Canonical pics-metadades coords are in `config.py` (swapped 2026-07-12).
+  Metadades has NO elevation field — `elevation_m` comes from the
+  Open-Meteo elevation API at those exact points.
+- Meteocat forecast endpoints serve ONLY a rolling 3-day window
+  (today..D+2); anything else is HTTP 400. There is no forecast archive —
+  never design anything that assumes past forecasts are refetchable.
+- The zonal endpoint uses its OWN 7-zone scheme (ids 1,3–8; the payload's
+  `nom` is authoritative), NOT the allaus/BPA zones — mapping ids from the
+  BPA legend put Boí Taüll in the wrong zone once already. The API exposes
+  NO zone geometry, so zonal rows are stored for ALL zones (`zona_<id>`
+  pseudo-stations) and the resort→zone choice lives in
+  `config.METEOCAT_ZONE_FOR_STATION` — change the config, never the
+  parser, and run `verify_meteocat_zones.py` before trusting it.
+- meteo.cat, apidocs.meteocat.gencat.cat and SMC-adjacent sites are
+  unreachable from this dev environment (WAF blocks non-browser agents);
+  only api.meteo.cat works. Don't burn time retrying them.
+- Meteocat zonal values live in `variablesValors[].valor` as STRINGS
+  (categorical codes and numbers alike); `periode` is metadata, and summer
+  payloads simply omit `valor` for the snow fields — a missing valor is
+  not an error.
+- AEMET gridded data: use the download server's tar.gz, NOT the OpenData
+  REST API (PNG only). The bundled GeoTIFFs ARE EPSG:4326 but they are
+  RGBA colormapped images, not data grids — decode values via each file's
+  `ESCALA` GDAL tag (bins; alpha 0 = zero bin), and don't trust `CAMPO`
+  (codes 207/228 both say "press"). Latest run only — no retention.
 - (Add entries here whenever an agent makes the same mistake twice.)
