@@ -11,8 +11,10 @@ corrected with XEMA observations, with Alta/Mitjana/Baixa confidence labels.
 - Rebuild SQLite from the raw archive: `python rebuild_db.py [--db PATH]`
 - Silent-failure watchdog: `python healthcheck.py` (alerts and exits 1 on stale data)
 - Test the alert webhook: `python alerting.py "message"` (uses `ALERT_WEBHOOK_URL`)
-- Verify Meteocat historics: `python verify_meteocat_historics.py` (requires
-  `METEOCAT_API_KEY`; script lands with Milestone 2)
+- Verify Meteocat historics: `python verify_meteocat_historics.py` (requires `METEOCAT_API_KEY`)
+- AEMET server reconnaissance: `python aemet_recon.py` (optionally
+  `AEMET_DOWNLOAD_URL=<url captured from the viewer>`; rasterio enables
+  raster inspection)
 - Tests: `pytest`
 
 ## Stack

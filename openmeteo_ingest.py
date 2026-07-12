@@ -2,9 +2,13 @@
 
 One multi-location request per run; the raw payload is archived BEFORE any
 parsing (see CLAUDE.md conventions). Parsed values land in SQLite in long
-format, in the units Open-Meteo returns them (normalization is a Milestone 2
-layer). run_time_utc is the fetch time — Open-Meteo does not expose the
-model run time.
+format, in the units Open-Meteo returns them — normalization to canonical
+units is `normalize.py`'s job. run_time_utc is the fetch time; Open-Meteo
+does not expose the model run time.
+
+The isozero is derived per timestep (see freezing_level.py) and stored as
+`freezing_level_derived` / `freezing_level_capped`, since the native
+diagnostic returns null on meteofrance_seamless.
 """
 import json
 from datetime import datetime, timezone
@@ -14,26 +18,24 @@ import db
 from alerting import send_alert
 from archive import archive_payload
 from config import ISO_UTC, RESORTS
+from freezing_level import PRESSURE_LEVELS, derive_freezing_level
 from httpcache import cached_get
-from snowline import PRESSURE_LEVELS, derive_snow_line
 
 SOURCE = "openmeteo"
 API_URL = "https://api.open-meteo.com/v1/forecast"
 
-SURFACE_VARIABLES = (
-    "temperature_2m",
-    "precipitation",
-    "snowfall",
-    "wind_speed_10m",
-    "wind_direction_10m",
-)
-# NOTE: precipitation_probability is deliberately absent — it comes from a
-# 27 km ensemble and must not touch the high-res chain (see CLAUDE.md).
+# Variable set from the handoff script. precipitation_probability is
+# deliberately absent — it comes from a 27 km ensemble and must not touch
+# the high-res chain (see CLAUDE.md non-goals).
 HOURLY_VARIABLES = (
-    SURFACE_VARIABLES
-    + tuple(f"temperature_{lvl}" for lvl in PRESSURE_LEVELS)
-    + tuple(f"geopotential_height_{lvl}" for lvl in PRESSURE_LEVELS)
+    ("temperature_2m", "relative_humidity_2m", "wet_bulb_temperature_2m",
+     "precipitation", "rain", "snowfall",
+     "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m")
+    + tuple(f"temperature_{p}hPa" for p in PRESSURE_LEVELS)
+    + tuple(f"geopotential_height_{p}hPa" for p in PRESSURE_LEVELS)
+    + ("wind_speed_700hPa", "wind_direction_700hPa")
 )
+DAILY_VARIABLES = ("precipitation_sum", "snowfall_sum")
 
 
 def build_url() -> str:
@@ -45,11 +47,16 @@ def build_url() -> str:
     return (f"{API_URL}?latitude={lats}&longitude={lons}"
             f"&elevation={elevations}"
             f"&hourly={','.join(HOURLY_VARIABLES)}"
-            f"&models=meteofrance_seamless&forecast_days=3&timezone=GMT")
+            f"&daily={','.join(DAILY_VARIABLES)}"
+            f"&models=meteofrance_seamless"
+            f"&forecast_days=4&timezone=UTC&timeformat=iso8601")
 
 
 def _iso_utc(t: str) -> str:
-    """Open-Meteo returns minute-resolution ISO times; normalize to ISO_UTC."""
+    """Normalize Open-Meteo's minute-resolution ISO times to ISO_UTC.
+
+    Daily timestamps are date-only ("2026-07-12") and stay that way.
+    """
     return f"{t}:00Z" if len(t) == 16 else t
 
 
@@ -69,6 +76,7 @@ def parse_openmeteo(payload: bytes, run_time_utc: str) -> List[db.Row]:
 
     rows: List[db.Row] = []
     for resort, block in zip(RESORTS, data):
+        station = resort["station"]
         hourly = block["hourly"]
         times = [_iso_utc(t) for t in hourly["time"]]
         empty = [None] * len(times)
@@ -76,21 +84,30 @@ def parse_openmeteo(payload: bytes, run_time_utc: str) -> List[db.Row]:
         for variable in HOURLY_VARIABLES:
             for valid_time, value in zip(times, hourly.get(variable) or empty):
                 if value is not None:
-                    rows.append((SOURCE, resort["station"], run_time_utc,
+                    rows.append((SOURCE, station, run_time_utc,
                                  valid_time, variable, float(value)))
 
         for idx, valid_time in enumerate(times):
-            temps = [(hourly.get(f"temperature_{lvl}") or empty)[idx]
-                     for lvl in PRESSURE_LEVELS]
-            heights = [(hourly.get(f"geopotential_height_{lvl}") or empty)[idx]
-                       for lvl in PRESSURE_LEVELS]
-            line_m, capped = derive_snow_line(temps, heights)
-            if line_m is not None:
-                rows.append((SOURCE, resort["station"], run_time_utc,
-                             valid_time, "snow_line_m", float(line_m)))
-                rows.append((SOURCE, resort["station"], run_time_utc,
-                             valid_time, "snow_line_capped",
-                             1.0 if capped else 0.0))
+            temps = [(hourly.get(f"temperature_{p}hPa") or empty)[idx]
+                     for p in PRESSURE_LEVELS]
+            heights = [(hourly.get(f"geopotential_height_{p}hPa") or empty)[idx]
+                       for p in PRESSURE_LEVELS]
+            level = derive_freezing_level(temps, heights)
+            if level.height_m is not None:
+                rows.append((SOURCE, station, run_time_utc, valid_time,
+                             "freezing_level_derived", float(level.height_m)))
+                rows.append((SOURCE, station, run_time_utc, valid_time,
+                             "freezing_level_capped",
+                             1.0 if level.capped else 0.0))
+
+        daily = block.get("daily") or {}
+        daily_times = [_iso_utc(t) for t in daily.get("time") or []]
+        for variable in DAILY_VARIABLES:
+            for valid_time, value in zip(daily_times,
+                                         daily.get(variable) or []):
+                if value is not None:
+                    rows.append((SOURCE, station, run_time_utc,
+                                 valid_time, variable, float(value)))
     return rows
 
 
@@ -105,8 +122,10 @@ def main() -> None:
 
     rows = parse_openmeteo(body, fetched_at.strftime(ISO_UTC))
     count = db.upsert_rows(db.connect(), rows)
+    derived = sum(1 for r in rows if r[4] == "freezing_level_derived")
     cache_note = " (from cache)" if from_cache else ""
-    print(f"{SOURCE}: archived {path}{cache_note}, upserted {count} rows")
+    print(f"{SOURCE}: archived {path}{cache_note}, upserted {count} rows "
+          f"({derived} derived freezing levels)")
 
 
 if __name__ == "__main__":

@@ -222,3 +222,8 @@ __marimo__/
 *.sqlite3
 *.db
 data/
+
+# verify_meteocat_historics.py outputs (standalone handoff script, cwd-relative)
+cache/
+verification_report.json
+snow.db

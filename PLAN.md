@@ -21,13 +21,21 @@ Protects irreplaceable data — everything else can be rebuilt from it.
 ## Milestone 2: Full three-leg ingestion + normalization
 - [ ] Run `verify_meteocat_historics.py` when credentials arrive; record the
       archived/recomputed/404 outcome — resolves open question 1
+      (script is in the repo; blocked on `METEOCAT_API_KEY`)
 - [ ] Replace placeholder coordinates in `openmeteo_ingest.py` with
-      canonical pics-metadades coords
+      canonical pics-metadades coords (handoff coords adopted meanwhile;
+      the canonical swap stays blocked on credentials)
 - [ ] AEMET reconnaissance script (publication lag, retention, CRS, nodata)
       — resolves open question 2
+      (`aemet_recon.py` ready; entry point
+      `aemet.es/es/api-eltiempo/modelos/download/harmonie/PB` — run it and
+      record the findings here)
 - [ ] AEMET ingest leg: GeoTIFF pixel extraction + wind GeoJSON → SQLite
 - [ ] Normalization + elevation-semantics layer (canonical unit, windows,
       bucket mapping, base/mid/top per resort) — resolves open questions 4–5
+      (`normalize.py` has the SWE-mm unit, 24/48 h windows and provisional
+      elevation bands; Meteocat bucket map and AEMET snow ratio are stubs
+      pending credentials/recon)
 
 ## Milestone 3: v1 complete
 All acceptance checks in the project brief pass.
@@ -56,8 +64,9 @@ All acceptance checks in the project brief pass.
   snow ratio)
 - Elevation semantics (canonical base/mid/top per resort)
 - Staleness/degraded-mode policy (2 of 3 legs, stale legs)
-- Deployment target: VPS vs Raspberry Pi (either fine; pick one, set cron +
-  off-machine backups day 1)
+- ~~Deployment target: VPS vs Raspberry Pi~~ RESOLVED 2026-07-12:
+  Raspberry Pi, on hold until the hardware arrives — then install
+  cron.example and off-machine backups on day 1
 - Verification metrics before calibration: MAE on 24h accumulation,
   hit/false-alarm on snow days, cota error in meters
 - Risk: consensus weights are prior-based and unverified — the run_time vs

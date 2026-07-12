@@ -5,13 +5,14 @@ import db
 import openmeteo_ingest as om
 from archive import archive_payload, iter_archived, run_time_from_path
 from config import RESORTS
-from snowline import PRESSURE_LEVELS
+from freezing_level import PRESSURE_LEVELS
 
 TIMES = ["2026-07-12T00:00", "2026-07-12T01:00"]
-# 5, 2, -1, -4 °C at 100/1000/1900/2800 m -> crossing at 1600 m
+DAILY_TIMES = ["2026-07-12"]
+# 5, 2, -1, -4 °C at 100/1000/1900/2800 m -> isozero at 1600 m
 LEVEL_TEMPS = [5.0, 2.0, -1.0, -4.0]
 LEVEL_HEIGHTS = [100.0, 1000.0, 1900.0, 2800.0]
-EXPECTED_SNOW_LINE = 1600.0
+EXPECTED_ISOZERO = 1600.0
 
 
 def make_payload() -> bytes:
@@ -19,12 +20,15 @@ def make_payload() -> bytes:
     blocks = []
     for i in range(len(RESORTS)):
         hourly = {"time": list(TIMES)}
-        for var in om.SURFACE_VARIABLES:
+        for var in om.HOURLY_VARIABLES:
             hourly[var] = [float(i), float(i) + 0.5]
-        for lvl, temp, height in zip(PRESSURE_LEVELS, LEVEL_TEMPS, LEVEL_HEIGHTS):
-            hourly[f"temperature_{lvl}"] = [temp, temp]
-            hourly[f"geopotential_height_{lvl}"] = [height, height]
-        block = {"hourly": hourly}
+        for p, temp, height in zip(PRESSURE_LEVELS, LEVEL_TEMPS, LEVEL_HEIGHTS):
+            hourly[f"temperature_{p}hPa"] = [temp, temp]
+            hourly[f"geopotential_height_{p}hPa"] = [height, height]
+        daily = {"time": list(DAILY_TIMES)}
+        for var in om.DAILY_VARIABLES:
+            daily[var] = [10.0 + i]
+        block = {"hourly": hourly, "daily": daily}
         if i > 0:
             block["location_id"] = i
         blocks.append(block)
@@ -42,13 +46,25 @@ def test_blocks_are_zipped_by_position():
         assert by_station[(resort["station"], "2026-07-12T00:00:00Z")] == float(i)
 
 
-def test_snow_line_is_derived_per_hour():
+def test_freezing_level_is_derived_per_hour():
     rows = om.parse_openmeteo(make_payload(), RUN_TIME)
-    lines = [r for r in rows if r[4] == "snow_line_m"]
-    capped = [r for r in rows if r[4] == "snow_line_capped"]
-    assert len(lines) == len(RESORTS) * len(TIMES)
-    assert all(r[5] == EXPECTED_SNOW_LINE for r in lines)
+    derived = [r for r in rows if r[4] == "freezing_level_derived"]
+    capped = [r for r in rows if r[4] == "freezing_level_capped"]
+    assert len(derived) == len(RESORTS) * len(TIMES)
+    assert all(r[5] == EXPECTED_ISOZERO for r in derived)
     assert all(r[5] == 0.0 for r in capped)
+
+
+def test_daily_rows_keep_date_only_valid_time():
+    rows = om.parse_openmeteo(make_payload(), RUN_TIME)
+    daily = [r for r in rows if r[4] == "snowfall_sum"]
+    assert len(daily) == len(RESORTS)
+    assert all(r[3] == "2026-07-12" for r in daily)
+
+
+def test_no_ensemble_probability_requested():
+    assert "precipitation_probability" not in om.HOURLY_VARIABLES
+    assert "precipitation_probability" not in om.build_url()
 
 
 def test_wrong_block_count_raises():
