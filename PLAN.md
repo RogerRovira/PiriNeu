@@ -75,18 +75,28 @@ Protects irreplaceable data — everything else can be rebuilt from it.
       SWE mm by definition, but the snow/ratio question now hinges on
       what f207 turns out to be)
 
-## Milestone 3: v1 complete — ON HOLD (2026-07-12, user decision)
-Do not start until Milestone 2 closes properly: the winter-blocked
-verifications above (la_molina zone, acumulacioNeu/cota units, f207/f228
-semantics) and the normalization layer come first.
+## Milestone 3: v1 complete — IN PROGRESS (green-lit 2026-07-12; the
+winter-blocked M2 verifications remain open in parallel)
 All acceptance checks in the project brief pass.
-- [ ] Regime-weighted consensus (N flows → AROME; S/E flows → AEMET+Meteocat)
-      per forecast block, all 3 resorts
-- [ ] Confidence matrix with hand-tuned initial thresholds; validate derived
-      isozero vs Meteocat (~100–200 m on storm days), absorb systematic bias
-- [ ] XEMA nowcast correction (mind Meteocat quota — polling multiplies calls)
-- [ ] Read-only dashboard with snow, cota, confidence and attributions
-      <!-- TODO: decide dashboard tech (static vs micro-framework) first -->
+- [x] Regime-weighted consensus (N flows → AROME; S/E flows → AEMET+Meteocat)
+      per forecast block, all 3 resorts (`consensus.py`, 2026-07-12):
+      two calendar-day blocks, hand-tuned prior weights, per-leg inputs
+      stored beside every blend so the priors can be verified and re-tuned.
+      Caveats: the Meteocat AMOUNT leg abstains until acumulacioNeu units
+      are confirmed (winter), and the AEMET snow gate (precip where pixel
+      temp ≤ +1 °C) is provisional until f207 is confirmed.
+- [x] Confidence matrix with hand-tuned initial thresholds (`consensus.py`:
+      leg count sets the ceiling — 3→Alta, 2→Mitjana, ≤1→Baixa — and
+      amount/cota disagreement demotes). Validating derived isozero vs
+      Meteocat (~100–200 m on storm days) needs winter data — the stored
+      `leg.*.cota_m` rows accumulate exactly that comparison.
+- [ ] XEMA nowcast correction (mind Meteocat quota — polling multiplies
+      calls) — blocked on XEMA station selection (open question below);
+      last remaining v1 feature.
+- [x] Read-only dashboard with snow, cota, confidence and attributions
+      (`dashboard.py`, static HTML per ADR-0003, deployed to GitHub Pages
+      by the ingest workflow). Live once Pages is enabled in repo settings
+      (Source: "GitHub Actions").
 
 ## Backlog (explicitly not v1)
 - 72/96h window with `arpege_europe` + ensembles — spread-based confidence

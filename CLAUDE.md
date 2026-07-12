@@ -21,6 +21,8 @@ corrected with XEMA observations, with Alta/Mitjana/Baixa confidence labels.
 - AEMET server reconnaissance: `python aemet_recon.py` (optionally
   `AEMET_DOWNLOAD_URL=<url captured from the viewer>`; rasterio enables
   raster inspection)
+- Build the consensus (writes source='consensus' rows): `python consensus.py`
+- Generate the static dashboard: `python dashboard.py [--out DIR]`
 - Tests: `pytest`
 
 ## Stack
@@ -28,9 +30,10 @@ Python 3 · SQLite long format `(station, run_time_utc, valid_time_utc,
 variable, value)` with idempotent upserts · rasterio for AEMET rasters ·
 GitHub Actions scheduled ingestion committing to the `datastore` branch
 (raw archive + SQLite + HTTP cache; AEMET rasters cropped to the Pyrenees
-window with a decode-parity guard) · minimal read-only dashboard (tech
-TBD). Rationale: `docs/adr/0001-initial-stack.md` and
-`docs/adr/0002-github-actions-data-acquisition.md` — don't repeat them here.
+window with a decode-parity guard) · static HTML dashboard built in CI
+and served by GitHub Pages. Rationale: `docs/adr/0001-initial-stack.md`,
+`docs/adr/0002-github-actions-data-acquisition.md` and
+`docs/adr/0003-static-dashboard-github-pages.md` — don't repeat them here.
 
 ## Non-goals — do NOT build these
 - GRIB2 pipelines anywhere — GeoTIFF/GeoJSON/JSON cover everything.

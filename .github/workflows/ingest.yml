@@ -37,6 +37,8 @@ jobs:
   ingest:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    outputs:
+      site: ${{ steps.site.outcome }}
     env:
       PIRINEU_DATA_DIR: ${{ github.workspace }}/datastore
       METEOCAT_API_KEY: ${{ secrets.METEOCAT_API_KEY }}
@@ -111,6 +113,22 @@ jobs:
         continue-on-error: true
         run: python healthcheck.py
 
+      # Consensus rows go into the same SQLite before the datastore commit,
+      # so every blend (and the per-leg inputs behind it) is preserved for
+      # the verification metrics planned in PLAN.md.
+      - name: Build consensus + dashboard (ADR-0003)
+        id: site
+        continue-on-error: true
+        run: |
+          python consensus.py
+          python dashboard.py --out site
+
+      - name: Upload dashboard artifact
+        if: steps.site.outcome == 'success'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
       - name: Commit the datastore
         if: always()
         run: |
@@ -141,7 +159,26 @@ jobs:
           steps.openmeteo.outcome == 'failure' ||
           steps.meteocat.outcome == 'failure' ||
           steps.aemet.outcome == 'failure' ||
-          steps.healthcheck.outcome == 'failure'
+          steps.healthcheck.outcome == 'failure' ||
+          steps.site.outcome == 'failure'
         run: |
-          echo "openmeteo=${{ steps.openmeteo.outcome }} meteocat=${{ steps.meteocat.outcome }} aemet=${{ steps.aemet.outcome }} healthcheck=${{ steps.healthcheck.outcome }}"
+          echo "openmeteo=${{ steps.openmeteo.outcome }} meteocat=${{ steps.meteocat.outcome }} aemet=${{ steps.aemet.outcome }} healthcheck=${{ steps.healthcheck.outcome }} site=${{ steps.site.outcome }}"
           exit 1
+
+  # Separate job so a Pages outage can't fail or re-run ingestion. Runs
+  # whenever the site artifact was built, even if some leg failed.
+  # One-time setup: repo Settings > Pages > Source = "GitHub Actions".
+  deploy-dashboard:
+    needs: ingest
+    if: always() && needs.ingest.outputs.site == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
