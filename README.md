@@ -16,12 +16,15 @@ built on coarse global models.
 Early development — v1 in progress. See [PLAN.md](PLAN.md).
 
 ## Quick start
-<!-- TODO: verify after scaffolding -->
 ```bash
-pip install -r requirements.txt          # TODO: requirements.txt pending
-export METEOCAT_API_KEY=...              # never commit secrets
-python openmeteo_ingest.py               # ingest the Open-Meteo/AROME leg
+pip install -r requirements.txt
+python openmeteo_ingest.py     # ingest the Open-Meteo/AROME leg (archives raw first)
+python rebuild_db.py           # prove SQLite rebuilds from the raw archive
+pytest                         # run the test suite
 ```
+Scheduling and failure alerting: see [cron.example](cron.example).
+Secrets (e.g. `METEOCAT_API_KEY`, arriving with Milestone 2) live in env
+vars — never commit them.
 
 ## Features (v1)
 - 48h new-snow and snow-line forecast per resort

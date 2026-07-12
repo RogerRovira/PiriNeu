@@ -6,11 +6,14 @@ wind-regime-weighted consensus of AROME (Open-Meteo), AEMET and Meteocat,
 corrected with XEMA observations, with Alta/Mitjana/Baixa confidence labels.
 
 ## Commands
-<!-- TODO: verify after scaffolding — no requirements.txt or test runner exists yet -->
 - Setup: `pip install -r requirements.txt`
 - Ingest Open-Meteo leg: `python openmeteo_ingest.py`
-- Verify Meteocat historics: `python verify_meteocat_historics.py` (requires `METEOCAT_API_KEY`)
-- Tests: TODO — none defined yet
+- Rebuild SQLite from the raw archive: `python rebuild_db.py [--db PATH]`
+- Silent-failure watchdog: `python healthcheck.py` (alerts and exits 1 on stale data)
+- Test the alert webhook: `python alerting.py "message"` (uses `ALERT_WEBHOOK_URL`)
+- Verify Meteocat historics: `python verify_meteocat_historics.py` (requires
+  `METEOCAT_API_KEY`; script lands with Milestone 2)
+- Tests: `pytest`
 
 ## Stack
 Python 3 · SQLite long format `(station, run_time_utc, valid_time_utc,

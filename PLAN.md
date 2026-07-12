@@ -5,14 +5,18 @@ forecast with its confidence label → decides whether and where to go.
 
 ## Milestone 1: Data safety + collect-forward
 Protects irreplaceable data — everything else can be rebuilt from it.
-- [ ] Raw-payload archiving wrapper: persist every raw JSON/GeoTIFF/GeoJSON
+- [x] Raw-payload archiving wrapper: persist every raw JSON/GeoTIFF/GeoJSON
       compressed and dated BEFORE parsing — done when: every ingest run
       archives its payloads and SQLite is demonstrably rebuildable
+      (`archive.py` + `rebuild_db.py`; parity covered by tests)
 - [ ] Cron scheduling aligned to source rhythms (Meteocat ~14:00 local
       daily; AEMET 00/06/12/18 UTC + lag; Open-Meteo hourly) + failure
       alerting — done when: a silent failure raises an alert
+      (code ready: `cron.example` + `healthcheck.py`; done once installed
+      on the deploy machine — deployment target still an open question)
 - [ ] Start collect-forward daily ingestion of available legs — done when:
       data accumulates daily regardless of the Meteocat historics outcome
+      (Open-Meteo leg ready to run; starts accumulating once cron is live)
 
 ## Milestone 2: Full three-leg ingestion + normalization
 - [ ] Run `verify_meteocat_historics.py` when credentials arrive; record the
