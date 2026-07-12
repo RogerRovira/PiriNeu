@@ -12,13 +12,17 @@ CACHE_DIR = DATA_DIR / "cache"      # HTTP disk cache (quota protection)
 LOG_DIR = DATA_DIR / "logs"
 DB_PATH = DATA_DIR / "pirineu.sqlite"  # rebuildable view of the raw archive
 
-# Coordinates/elevations from the handoff openmeteo_ingest.py — still
-# PLACEHOLDERS: swap in the canonical pics-metadades coords once Meteocat
-# credentials arrive (see CLAUDE.md gotchas).
+# CANONICAL coordinates for ALL sources: Meteocat pics-metadades anchor
+# peaks (fetched 2026-07-12; see CLAUDE.md gotchas). Metadades carries NO
+# elevation field, so elevation_m is the Open-Meteo elevation API (90 m DEM)
+# value at these exact points — consistent with the `&elevation=` we send.
 RESORTS = (
-    {"station": "baqueira", "lat": 42.6975, "lon": 0.9422, "elevation_m": 1800},
-    {"station": "boi_taull", "lat": 42.5219, "lon": 0.8386, "elevation_m": 2000},
-    {"station": "la_molina", "lat": 42.3339, "lon": 1.9497, "elevation_m": 1700},
+    # Cap de Vaquèira (slug cap-de-vaqueira)
+    {"station": "baqueira", "lat": 42.6918885, "lon": 0.9742379, "elevation_m": 2458},
+    # Pica de Cerví (slug pica-de-cervi)
+    {"station": "boi_taull", "lat": 42.4529432, "lon": 0.8792261, "elevation_m": 2710},
+    # La Tosa d'Alp (slug la-tosa-dalp)
+    {"station": "la_molina", "lat": 42.3205751, "lon": 1.8926609, "elevation_m": 2526},
 )
 
 # Cap on new (uncached) HTTP calls per process run.

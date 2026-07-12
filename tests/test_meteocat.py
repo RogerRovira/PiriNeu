@@ -1,3 +1,9 @@
+"""Fixtures mirror REAL Meteocat payloads (archived 2026-07-12): zonal
+franjes carry no date and wrap values in variablesValors with string
+valors; pics are 3-hourly timesteps with per-cota numeric variables.
+Winter-only fields (acumulacioNeu/cota with a valor) are included here the
+way the schema delivers them, even though July payloads omit the valor.
+"""
 import json
 
 import db
@@ -9,18 +15,37 @@ RUN = "2026-07-12T13:30:00Z"
 
 def zones_payload() -> bytes:
     return json.dumps({
-        "dataPrediccio": "2026-07-13T00:00Z",
-        "dataPublicacio": "2026-07-12T12:05Z",
+        "dataPrediccio": "2026-07-13Z",
+        "dataPublicacio": "2026-07-12T08:42Z",
         "franjes": [
-            {"data": "2026-07-13T00:00Z",
+            {"idTipusFranja": 5, "nom": "24h",
              "zones": [
-                 {"idZona": 1, "neu": {"cota": 1800, "quantitat": 2}},
-                 {"idZona": 3, "neu": {"cota": 2000, "quantitat": 1}},
-                 {"idZona": 99, "neu": {"cota": 0, "quantitat": 0}},
+                 {"idZona": 1, "nom": "Vessant nord Pirineu occi",
+                  "variablesValors": [
+                      {"nom": "acumulacio", "valor": "5", "periode": 2},
+                      {"nom": "acumulacioNeu", "valor": "12", "periode": 2},
+                      {"nom": "comentari", "periode": 2},
+                  ]},
+                 {"idZona": 99, "nom": "Zona desconeguda",
+                  "variablesValors": [
+                      {"nom": "acumulacioNeu", "valor": "99", "periode": 2},
+                  ]},
              ]},
-            {"data": "2026-07-13T12:00Z",
+            # real-payload quirk: "06:00 - 12:00h" (no h on the first time)
+            {"idTipusFranja": 2, "nom": "06:00 - 12:00h",
              "zones": [
-                 {"idZona": 6, "probabilitat": 60},
+                 {"idZona": 5, "nom": "Vessant sud Pirineu occid",
+                  "variablesValors": [
+                      {"nom": "cel", "valor": "3", "periode": 1},
+                      {"nom": "cota", "valor": "1800", "periode": 1},
+                      {"nom": "probabilitat", "valor": "1", "periode": 1},
+                      {"nom": "comentari", "periode": 2},
+                      {"nom": "acumulacio", "periode": 2},  # no valor today
+                  ]},
+                 {"idZona": 6, "nom": "Vessant sud Prepirineu or",
+                  "variablesValors": [
+                      {"nom": "tempesta", "valor": "1", "periode": 1},
+                  ]},
              ]},
         ],
     }).encode("utf-8")
@@ -30,30 +55,49 @@ def pic_payload() -> bytes:
     return json.dumps([
         {"data": "2026-07-13T06:00Z",
          "cotes": [
-             {"cota": 2500,
-              "variables": [
-                  {"nom": "isozero", "valor": 1900},
-                  {"nom": "temperatura", "valor": -2.5, "unitat": None},
-              ]},
+             {"cota": "totes",
+              "variables": [{"nom": "isozero", "valor": 1900},
+                            {"nom": "iso-10", "valor": 3200}]},
+             {"cota": "2500",
+              "variables": [{"nom": "temperatura", "valor": -2.5},
+                            {"nom": "velocitat vent", "valor": 18},
+                            {"nom": "direccio vent", "valor": 260}]},
          ]},
     ]).encode("utf-8")
 
 
-def test_zone_rows_map_zones_to_stations_and_skip_unknown_zones():
+def test_zone_rows_use_franja_windows_and_skip_valueless_variables():
     rows = mc._parse_zones(json.loads(zones_payload()), RUN, "2026-07-13")
-    stations = {r[1] for r in rows}
-    assert stations == {"baqueira", "boi_taull", "la_molina"}
+    assert {r[1] for r in rows} == {"baqueira", "boi_taull", "la_molina"}
+
     baqueira = {r[4]: r[5] for r in rows if r[1] == "baqueira"}
-    assert baqueira == {"zonal.neu.cota": 1800.0, "zonal.neu.quantitat": 2.0}
+    assert baqueira == {"zonal.acumulacio.24h": 5.0,
+                        "zonal.acumulacioNeu.24h": 12.0}
     assert all(r[3] == "2026-07-13T00:00Z" for r in rows if r[1] == "baqueira")
+
+    boi = {r[4]: r[5] for r in rows if r[1] == "boi_taull"}
+    # comentari (text) and acumulacio-without-valor yield no rows
+    assert boi == {"zonal.cel.6h": 3.0, "zonal.cota.6h": 1800.0,
+                   "zonal.probabilitat.6h": 1.0}
+    assert all(r[3] == "2026-07-13T06:00Z" for r in rows if r[1] == "boi_taull")
+
+
+def test_franja_window_falls_back_to_idTipusFranja():
+    assert mc._franja_window({"nom": "12:00h - 18:00h"}) == (12, 6)
+    assert mc._franja_window({"nom": "24h"}) == (0, 24)
+    assert mc._franja_window({"nom": "???", "idTipusFranja": 4}) == (18, 6)
+    assert mc._franja_window({"nom": "???", "idTipusFranja": 42}) is None
 
 
 def test_pic_rows_carry_variable_level_and_time():
     rows = mc._parse_pic(json.loads(pic_payload()), RUN, "baqueira",
                          "2026-07-13")
     by_var = {r[4]: r[5] for r in rows}
-    assert by_var == {"pic.isozero.2500.valor": 1900.0,
-                      "pic.temperatura.2500.valor": -2.5}
+    assert by_var == {"pic.isozero.totes": 1900.0,
+                      "pic.iso-10.totes": 3200.0,
+                      "pic.temperatura.2500": -2.5,
+                      "pic.velocitat_vent.2500": 18.0,
+                      "pic.direccio_vent.2500": 260.0}
     assert all(r[3] == "2026-07-13T06:00Z" for r in rows)
 
 

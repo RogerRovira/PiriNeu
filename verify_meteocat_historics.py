@@ -47,9 +47,11 @@ ANCHOR_CODES = {
     "4d04de5e": "La Molina (La Tosa d'Alp)",
 }
 
-# Zone IDs of interest inside the all-zones response
-ZONE_IDS = {1: "Aran - Franja Nord Pallaresa", 3: "Ribagorcana - Vall Fosca",
-            6: "Vessant Nord Cadi - Moixero"}
+# Zone IDs of interest inside the all-zones response. Real names observed
+# 2026-07-12 (the endpoint's own 7-zone scheme, NOT the allaus/BPA zones):
+ZONE_IDS = {1: "Vessant nord Pirineu occidental",
+            5: "Vessant sud Pirineu occidental",
+            6: "Vessant sud Prepirineu oriental"}
 
 
 def probe_dates(today: date) -> list[tuple[str, date]]:

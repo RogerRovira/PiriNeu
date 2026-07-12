@@ -12,25 +12,32 @@ Quota discipline (the Predicció plan is tightly capped — see CLAUDE.md):
   METEOCAT_PICS_TOMORROW=1 to add tomorrow (3 extra calls/day)
 Default daily budget: 5 calls (+1 metadades weekly).
 
-Every payload is archived BEFORE parsing. Parsing is deliberately tolerant
-and generic (numeric leaves, deterministic names): the exact response
-schemas are only partially known until real payloads accumulate, and the
-archive — not the parser — is the source of truth. Refine the parser
-later and rebuild with rebuild_db.py.
+Every payload is archived BEFORE parsing; the archive — not the parser —
+is the source of truth. Parsers follow the REAL payload shapes observed
+2026-07-12 (see PLAN.md, Meteocat verification outcome):
+- zonal: {dataPrediccio, dataPublicacio, franjes:[{idTipusFranja, nom,
+  zones:[{idZona, nom, variablesValors:[{nom, valor?, periode}]}]}]}.
+  franjes carry NO date — the window (24h or a 6h block) comes from the
+  franja `nom`; `valor` is a STRING (categorical codes like cel/tempesta,
+  or numbers like cota); variables without `valor` are simply absent that
+  day (e.g. acumulacioNeu in summer).
+- pics: [{data, cotes:[{cota, variables:[{nom, valor}]}]}] with cota in
+  {"totes", "1500", "2000", "2500", "3000"} and numeric valor.
 
 The slugs come from pics/metadades, whose lat/lon are the CANONICAL
-coordinates for ALL sources (gotcha): every run prints them next to the
-config.py placeholders so the swap isn't forgotten.
+coordinates for ALL sources (gotcha): config.py carries them since
+2026-07-12, and every run alerts if the metadades coords ever drift.
 """
 import json
 import os
-from datetime import date, datetime, timedelta, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import db
 from alerting import send_alert
 from archive import archive_payload
-from config import ISO_UTC
+from config import ISO_UTC, RESORTS
 from httpcache import cached_get
 
 SOURCE = "meteocat"
@@ -42,8 +49,16 @@ ANCHOR_PEAKS = {
     "246d5775": "boi_taull",   # Pica de Cervi
     "4d04de5e": "la_molina",   # La Tosa d'Alp
 }
-# Zone id inside the all-zones response -> station
-ZONE_STATIONS = {1: "baqueira", 3: "boi_taull", 6: "la_molina"}
+# Zone id inside the all-zones response -> station. The endpoint uses its
+# OWN 7-zone scheme (ids 1,3-8; names in the payload), NOT the allaus/BPA
+# zones the handoff assumed — the old boi_taull id (3) was actually
+# "Vessant nord Pirineu oriental". Observed 2026-07-12:
+#   1 Vessant nord Pirineu occidental (Aran)          -> baqueira
+#   5 Vessant sud Pirineu occidental (Ribagorçana)    -> boi_taull
+#   6 Vessant sud Prepirineu oriental (Cadí-Moixeró?) -> la_molina
+#     PROVISIONAL — no zones-metadades endpoint exists; cross-check against
+#     the la-tosa-dalp pics forecast on the first winter payload.
+ZONE_STATIONS = {1: "baqueira", 5: "boi_taull", 6: "la_molina"}
 
 WEEK_SECONDS = 7 * 24 * 3600
 
@@ -63,30 +78,37 @@ def _get(path: str, ttl_seconds: Optional[int] = None) -> bytes:
     return body
 
 
-# --- generic, deterministic flattening -------------------------------------
+# --- value/window helpers ----------------------------------------------------
 
-_SKIP_KEYS = {"idZona"}  # identity fields, not measurements
+def _as_float(valor) -> Optional[float]:
+    """Meteocat sends `valor` as str, int or float; text (comentari) -> None."""
+    if isinstance(valor, bool) or valor is None:
+        return None
+    try:
+        return float(valor)
+    except (TypeError, ValueError):
+        return None
 
 
-def _numeric_leaves(obj, prefix: str = "") -> List[tuple]:
-    """Yield (dotted_name, float) for every numeric leaf, depth-first.
+# Fallback when a franja `nom` is unparseable: idTipusFranja -> (start, span).
+_FRANJA_BY_ID = {1: (0, 6), 2: (6, 6), 3: (12, 6), 4: (18, 6), 5: (0, 24)}
+_FRANJA_RE = re.compile(r"(\d{1,2}):(\d{2})")
 
-    Deterministic for a given payload, so rebuilds reproduce identical rows
-    even though the full Meteocat schema isn't pinned down yet.
+
+def _franja_window(franja: dict) -> Optional[tuple]:
+    """(start_hour, span_hours) of a franja.
+
+    Real `nom` values are inconsistently formatted ("24h", "00:00h - 06:00h",
+    "06:00 - 12:00h") so parse the clock times, falling back to the
+    idTipusFranja mapping observed alongside them.
     """
-    out = []
-    if isinstance(obj, dict):
-        for key in sorted(obj):
-            if key in _SKIP_KEYS:
-                continue
-            name = f"{prefix}.{key}" if prefix else key
-            out.extend(_numeric_leaves(obj[key], name))
-    elif isinstance(obj, list):
-        for i, item in enumerate(obj):
-            out.extend(_numeric_leaves(item, f"{prefix}[{i}]"))
-    elif isinstance(obj, (int, float)) and not isinstance(obj, bool):
-        out.append((prefix, float(obj)))
-    return out
+    nom = str(franja.get("nom") or "")
+    hours = [int(h) for h, _ in _FRANJA_RE.findall(nom)]
+    if len(hours) == 2 and hours[1] > hours[0]:
+        return hours[0], hours[1] - hours[0]
+    if nom.strip() == "24h":
+        return 0, 24
+    return _FRANJA_BY_ID.get(franja.get("idTipusFranja"))
 
 
 # --- parsers (pure: archived payload -> rows) -------------------------------
@@ -113,36 +135,58 @@ def parse_meteocat(payload: bytes, run_time_utc: str, name: str) -> List[db.Row]
 
 
 def _parse_zones(body: dict, run_time_utc: str, target_date: str) -> List[db.Row]:
+    """One row per (zone-of-interest, franja, variable-with-a-valor).
+
+    valid_time is the franja window START on the target date, taken at face
+    value from the payload's own "Z" suffix (dataPrediccio is "<date>Z");
+    the window length lives in the variable name (e.g. zonal.cota.6h vs
+    zonal.acumulacioNeu.24h) so the 24h summary never mixes with the blocks.
+    Categorical codes (cel, tempesta, probabilitat…) are stored as their
+    numeric code — the bucket semantics belong to normalize.py.
+    """
     rows: List[db.Row] = []
     if not isinstance(body, dict):
         return rows
-    for i, franja in enumerate(body.get("franjes") or []):
-        valid = franja.get("data") or f"{target_date}[franja{i}]"
+    for franja in body.get("franjes") or []:
+        window = _franja_window(franja)
+        if window is None:
+            continue
+        start, span = window
+        valid = f"{target_date}T{start:02d}:00Z"
         for zone in franja.get("zones") or []:
             station = ZONE_STATIONS.get(zone.get("idZona"))
             if station is None:
                 continue
-            for variable, value in _numeric_leaves(zone):
-                rows.append((SOURCE, station, run_time_utc, str(valid),
-                             f"zonal.{variable}", value))
+            for var in zone.get("variablesValors") or []:
+                value = _as_float(var.get("valor"))
+                if var.get("nom") and value is not None:
+                    rows.append((SOURCE, station, run_time_utc, valid,
+                                 f"zonal.{var['nom']}.{span}h", value))
     return rows
 
 
 def _parse_pic(body, run_time_utc: str, station: str,
                target_date: str) -> List[db.Row]:
+    """One row per (timestep, cota, variable): pic.<nom>.<cota>.
+
+    Real payloads: 8 three-hourly timesteps ("<date>THH:MMZ"), cota "totes"
+    for column variables (isozero, iso-10) and fixed levels 1500/2000/2500/
+    3000 for temperatura/humitat/velocitat vent/direccio vent. Spaces in
+    noms become underscores so variable names stay shell/SQL-friendly.
+    """
     rows: List[db.Row] = []
     if not isinstance(body, list):
         return rows
     for i, point in enumerate(body):
-        valid = point.get("data") or f"{target_date}[t{i}]"
+        valid = str(point.get("data") or f"{target_date}[t{i}]")
         for cota in point.get("cotes") or []:
             level = cota.get("cota") or cota.get("altitud") or "peak"
             for var in cota.get("variables") or []:
-                nom = var.get("nom") or "var"
-                for leaf, value in _numeric_leaves(
-                        {k: v for k, v in var.items() if k != "nom"}):
-                    rows.append((SOURCE, station, run_time_utc, str(valid),
-                                 f"pic.{nom}.{level}.{leaf}", value))
+                value = _as_float(var.get("valor"))
+                if var.get("nom") and value is not None:
+                    nom = str(var["nom"]).replace(" ", "_")
+                    rows.append((SOURCE, station, run_time_utc, valid,
+                                 f"pic.{nom}.{level}", value))
     return rows
 
 
@@ -174,10 +218,19 @@ def main() -> None:
     rows: List[db.Row] = []
 
     slugs = resolve_slugs()
-    print("canonical pics-metadades coords (swap config.py placeholders!):")
+    by_station = {r["station"]: r for r in RESORTS}
     for codi, info in slugs.items():
-        print(f"  {ANCHOR_PEAKS[codi]}: {info['name']} "
-              f"lat={info['lat']} lon={info['lon']} slug={info['slug']}")
+        station = ANCHOR_PEAKS[codi]
+        cfg = by_station[station]
+        # config.py holds the canonical pics-metadades coords; alert on drift
+        # (rounded to 7 decimals there, so tolerate ~a few cm).
+        if (abs(cfg["lat"] - info["lat"]) > 1e-6
+                or abs(cfg["lon"] - info["lon"]) > 1e-6):
+            send_alert(f"meteocat metadades coords for {station} drifted from "
+                       f"config.py: {info['lat']},{info['lon']} "
+                       f"vs {cfg['lat']},{cfg['lon']}")
+        print(f"  {station}: {info['name']} lat={info['lat']} "
+              f"lon={info['lon']} slug={info['slug']}")
 
     zone_dates = [today, today + timedelta(days=1)]
     for d in zone_dates:

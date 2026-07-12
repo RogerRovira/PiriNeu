@@ -66,8 +66,22 @@ TBD). Rationale: `docs/adr/0001-initial-stack.md` — don't repeat it here.
   zone parameter exists) — one call serves every resort.
 - `meteocat-openapi.yaml` has inconsistent parameter casing (snake_case vs
   camelCase). That mirrors the real API — preserve as-is.
-- Coordinates/elevations in `openmeteo_ingest.py` are PLACEHOLDERS — replace
-  with canonical pics-metadades coords once Meteocat credentials arrive.
-- AEMET gridded data: use the download server's GeoTIFF/GeoJSON, NOT the
-  OpenData REST API (PNG only). Don't assume the raster CRS is WGS84.
+- Canonical pics-metadades coords are in `config.py` (swapped 2026-07-12).
+  Metadades has NO elevation field — `elevation_m` comes from the
+  Open-Meteo elevation API at those exact points.
+- Meteocat forecast endpoints serve ONLY a rolling 3-day window
+  (today..D+2); anything else is HTTP 400. There is no forecast archive —
+  never design anything that assumes past forecasts are refetchable.
+- The zonal endpoint uses its OWN 7-zone scheme (ids 1,3–8; the payload's
+  `nom` is authoritative), NOT the allaus/BPA zones — mapping ids from the
+  BPA legend put Boí Taüll in the wrong zone once already.
+- Meteocat zonal values live in `variablesValors[].valor` as STRINGS
+  (categorical codes and numbers alike); `periode` is metadata, and summer
+  payloads simply omit `valor` for the snow fields — a missing valor is
+  not an error.
+- AEMET gridded data: use the download server's tar.gz, NOT the OpenData
+  REST API (PNG only). The bundled GeoTIFFs ARE EPSG:4326 but they are
+  RGBA colormapped images, not data grids — decode values via each file's
+  `ESCALA` GDAL tag (bins; alpha 0 = zero bin), and don't trust `CAMPO`
+  (codes 207/228 both say "press"). Latest run only — no retention.
 - (Add entries here whenever an agent makes the same mistake twice.)

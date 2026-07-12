@@ -19,23 +19,40 @@ Protects irreplaceable data — everything else can be rebuilt from it.
       (Open-Meteo leg ready to run; starts accumulating once cron is live)
 
 ## Milestone 2: Full three-leg ingestion + normalization
-- [ ] Run `verify_meteocat_historics.py` when credentials arrive; record the
-      archived/recomputed/404 outcome — resolves open question 1
-      (script is in the repo; blocked on `METEOCAT_API_KEY`)
-- [ ] Replace placeholder coordinates in `openmeteo_ingest.py` with
-      canonical pics-metadades coords (handoff coords adopted meanwhile;
-      the canonical swap stays blocked on credentials)
-- [ ] AEMET reconnaissance script (publication lag, retention, CRS, nodata)
-      — resolves open question 2
-      (`aemet_recon.py` ready; entry point
-      `aemet.es/es/api-eltiempo/modelos/download/harmonie/PB` — run it and
-      record the findings here)
-- [ ] AEMET ingest leg: GeoTIFF pixel extraction + wind GeoJSON → SQLite
+- [x] Run `verify_meteocat_historics.py` when credentials arrive; record the
+      archived/recomputed/404 outcome — resolves open question 1.
+      RESULT 2026-07-12: **no historics** (outcome C, via HTTP 400 rather
+      than 404). Zone and pic endpoints serve ONLY a rolling 3-day window
+      — the 400 body says it outright: "Els dies disponibles són:
+      12-07-2026, 13-07-2026 i 14-07-2026". Every past date (yesterday,
+      -7d, -30d, -365d, 2017) fails for both endpoint families;
+      `dataPublicacio` on the served days is same-day (~08:42Z). No
+      bootstrap archive → collect-forward only, XEMA daily endpoints as
+      ground truth. Report: `verification_report.json`.
+- [x] Replace placeholder coordinates with canonical pics-metadades coords
+      — done in `config.py` 2026-07-12 (anchor peaks Cap de Vaquèira,
+      Pica de Cerví, La Tosa d'Alp). Metadades carries NO elevation field,
+      so `elevation_m` is the Open-Meteo elevation API (90 m DEM) value at
+      the canonical points: 2458 / 2710 / 2526 m.
+- [x] AEMET reconnaissance (publication lag, retention, CRS, nodata) —
+      resolves open question 2; findings recorded under "Open questions"
+      below and in `data/aemet_recon_report.json`. Headline: the GeoTIFFs
+      are colormapped RGBA images, values only recoverable as legend bins.
+- [ ] Refine Meteocat parsers against real payload shapes
+      (done 2026-07-12: franja windows, variablesValors, zone scheme fix,
+      per-cota pics) — re-verify the winter-only fields (acumulacioNeu,
+      cota with valor; la_molina zone id) on the first snowfall payload
+- [ ] AEMET ingest leg: GeoTIFF pixel extraction + wind GeoJSON → SQLite.
+      Now shaped by the recon: decode pixel RGBA → bin via the embedded
+      `ESCALA` GDAL tag per file (values are BINS, e.g. precip 0.5–1 mm,
+      not continuous); nearest `ang_viento` GeoJSON point for direction;
+      fetch each run within its ~6 h cycle (no retention).
 - [ ] Normalization + elevation-semantics layer (canonical unit, windows,
       bucket mapping, base/mid/top per resort) — resolves open questions 4–5
       (`normalize.py` has the SWE-mm unit, 24/48 h windows and provisional
-      elevation bands; Meteocat bucket map and AEMET snow ratio are stubs
-      pending credentials/recon)
+      elevation bands; Meteocat zonal categorical codes — cel, intensitat,
+      probabilitat, tempesta, visibilitat — now flow into SQLite as numeric
+      codes awaiting the bucket map; AEMET snow ratio still open)
 
 ## Milestone 3: v1 complete
 All acceptance checks in the project brief pass.
@@ -57,8 +74,32 @@ All acceptance checks in the project brief pass.
 - 10-day "outlook" — likely never
 
 ## Open questions
-- Meteocat archived forecasts? (blocked on credentials; decides bootstrap)
-- AEMET operational unknowns (lag, retention, CRS, nodata)
+- ~~Meteocat archived forecasts?~~ RESOLVED 2026-07-12: none — rolling
+  3-day window (today..D+2), past dates HTTP 400. Collect-forward only;
+  XEMA (historical) is the verification ground truth. See Milestone 2.
+- ~~AEMET operational unknowns (lag, retention, CRS, nodata)~~ RESOLVED
+  2026-07-12 (12 UTC run, `aemet_recon.py`, `data/aemet_recon_report.json`):
+  - Format: the entry point serves one tar.gz (`application/tar+gzip`,
+    ~22 MB for PB) with 440 files: 48 hourly steps (run+1h..run+48h) ×
+    6 GeoTIFF fields + 2 GeoJSONs, plus 3h/6h precip aggregates. Fields:
+    11=temperature, 32=wind speed, 61=precip (1HH/3HH/6HH), 71=cloud
+    cover, plus local codes 207 (range 0.001–0.2, likely snow in m) and
+    228 (0–140, likely gust km/h) — both have CAMPO mislabeled "press";
+    confirm on a winter run. Wind direction arrives as GeoJSON points
+    (`ang_viento`), pressure as GeoJSON isobar lines (`pres_Pa`).
+  - Lag: PB bundle for the 12 UTC run was built 14:44 UTC → **~2¾ h**
+    (Canarias ~2 h); no Last-Modified header, gzip mtime is the signal.
+  - Retention: **latest run only** — no date/run parameters discovered at
+    the entry point, so each 00/06/12/18 run must be fetched within its
+    6 h cycle (collect-forward; a missed cycle is unrecoverable).
+  - CRS: EPSG:4326 as documented (PB grid 640×400 at 0.025°, bounds
+    -11.0125..4.9875 E, 34.4875..44.4875 N) — all three resorts inside.
+  - Nodata: none declared. The rasters are **RGBA uint8 colormapped
+    images, not data grids**: numeric values are recoverable only as the
+    legend bins in each file's `ESCALA` GDAL tag (RGBA → value range);
+    the zero bin renders transparent (alpha 0). Consensus inputs from
+    AEMET are therefore binned, not continuous. Mandatory attribution
+    ships in the `USO` tag.
 - XEMA station selection per resort + gauge undercatch handling (20–50%)
 - Semantic normalization spec (SWE mm proposal, windows, bucket mapping,
   snow ratio)
