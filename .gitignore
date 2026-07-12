@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- ForecastPiriNeu: data archive & SQLite (rebuildable view; raw archive backed up off-machine) ---
+*.sqlite
+*.sqlite3
+*.db
+data/
