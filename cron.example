@@ -16,8 +16,11 @@ PIRINEU=/path/to/PiriNeu
 # this catches the job that "succeeds" while storing nothing.
 0 8 * * * cd $PIRINEU && python3 healthcheck.py >> data/logs/cron.log 2>&1
 
-# Milestone 2 legs (uncomment when the scripts land):
 # Meteocat publishes ~14:00 local (12:00/13:00 UTC depending on DST).
-# 30 13 * * * cd $PIRINEU && python3 meteocat_ingest.py >> data/logs/cron.log 2>&1
-# AEMET publishes at 00/06/12/18 UTC plus lag (reconnaissance pending).
+# Requires METEOCAT_API_KEY in the crontab environment (or an env file
+# sourced by a wrapper) — never inside the repo.
+30 13 * * * cd $PIRINEU && python3 meteocat_ingest.py >> data/logs/cron.log 2>&1
+
+# AEMET leg (uncomment when the script lands after reconnaissance):
+# AEMET publishes at 00/06/12/18 UTC plus lag.
 # 45 1,7,13,19 * * * cd $PIRINEU && python3 aemet_ingest.py >> data/logs/cron.log 2>&1

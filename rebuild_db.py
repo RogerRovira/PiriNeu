@@ -11,12 +11,16 @@ import argparse
 import db
 from archive import iter_archived, run_time_from_path
 from config import DATA_DIR
+from meteocat_ingest import SOURCE as METEOCAT_SOURCE
+from meteocat_ingest import parse_meteocat
 from openmeteo_ingest import SOURCE as OPENMETEO_SOURCE
 from openmeteo_ingest import parse_openmeteo
 
-# One entry per ingestion leg; Meteocat and AEMET join in Milestone 2.
+# One entry per ingestion leg: fn(payload, run_time_utc, archive_name).
+# The AEMET leg joins once aemet_recon.py answers open question 2.
 PARSERS = {
-    OPENMETEO_SOURCE: parse_openmeteo,
+    OPENMETEO_SOURCE: lambda raw, run, name: parse_openmeteo(raw, run),
+    METEOCAT_SOURCE: parse_meteocat,
 }
 
 
@@ -26,7 +30,7 @@ def rebuild(db_path) -> None:
         payloads = row_count = failures = 0
         for path, raw in iter_archived(source):
             try:
-                rows = parser(raw, run_time_from_path(path))
+                rows = parser(raw, run_time_from_path(path), path.name)
             except Exception as exc:  # keep going: one bad file != lost archive
                 failures += 1
                 print(f"{source}: skipped {path}: {exc}")

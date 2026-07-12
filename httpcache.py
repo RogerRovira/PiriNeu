@@ -26,10 +26,12 @@ _new_calls_made = 0
 def cached_get(url: str,
                cache_dir: Optional[Path] = None,
                ttl_seconds: Optional[int] = None,
-               timeout: int = 60) -> Tuple[int, bytes, bool]:
+               timeout: int = 60,
+               headers: Optional[dict] = None) -> Tuple[int, bytes, bool]:
     """GET a URL through the disk cache.
 
-    Returns (status_code, body_bytes, from_cache).
+    Returns (status_code, body_bytes, from_cache). `headers` may carry
+    auth (e.g. X-Api-Key) — headers are NEVER written to the cache entry.
     """
     global _new_calls_made
     cache_dir = Path(cache_dir or CACHE_DIR)
@@ -49,7 +51,7 @@ def cached_get(url: str,
             f"call budget exhausted ({MAX_NEW_CALLS} new calls this run)")
     _new_calls_made += 1
 
-    response = requests.get(url, timeout=timeout)
+    response = requests.get(url, timeout=timeout, headers=headers)
     entry = {
         "url": url,
         "status": response.status_code,

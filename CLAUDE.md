@@ -8,6 +8,8 @@ corrected with XEMA observations, with Alta/Mitjana/Baixa confidence labels.
 ## Commands
 - Setup: `pip install -r requirements.txt`
 - Ingest Open-Meteo leg: `python openmeteo_ingest.py`
+- Ingest Meteocat leg: `python meteocat_ingest.py` (requires `METEOCAT_API_KEY`;
+  ~5 calls/day — quota-guarded; `METEOCAT_PICS_TOMORROW=1` adds 3)
 - Rebuild SQLite from the raw archive: `python rebuild_db.py [--db PATH]`
 - Silent-failure watchdog: `python healthcheck.py` (alerts and exits 1 on stale data)
 - Test the alert webhook: `python alerting.py "message"` (uses `ALERT_WEBHOOK_URL`)
