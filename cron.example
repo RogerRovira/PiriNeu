@@ -1,3 +1,6 @@
+# SUPERSEDED for deployment by GitHub Actions (ADR-0002,
+# .github/workflows/ingest.yml) — kept as reference for local/manual runs
+# or a future self-hosted fallback.
 # Cron schedule aligned to source rhythms (PLAN.md, Milestone 1).
 # Install on the deploy machine with:  crontab -e   (paths need adjusting).
 # All times are UTC — run `timedatectl set-timezone UTC` on the box or

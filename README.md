@@ -36,8 +36,10 @@ Secrets (e.g. `METEOCAT_API_KEY`) live in env vars — never commit them.
 - Read-only dashboard with full source attribution
 
 ## Tech
-Python 3, SQLite, rasterio, cron; minimal read-only web dashboard.
-Why this stack: [docs/adr/0001](docs/adr/0001-initial-stack.md).
+Python 3, SQLite, rasterio; GitHub Actions ingestion committing to the
+`datastore` branch; minimal read-only web dashboard.
+Why: [docs/adr/0001](docs/adr/0001-initial-stack.md),
+[docs/adr/0002](docs/adr/0002-github-actions-data-acquisition.md).
 
 ## Data sources & attribution
 Forecast and observation data: [Open-Meteo](https://open-meteo.com)

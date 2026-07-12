@@ -9,14 +9,19 @@ Protects irreplaceable data — everything else can be rebuilt from it.
       compressed and dated BEFORE parsing — done when: every ingest run
       archives its payloads and SQLite is demonstrably rebuildable
       (`archive.py` + `rebuild_db.py`; parity covered by tests)
-- [ ] Cron scheduling aligned to source rhythms (Meteocat ~14:00 local
-      daily; AEMET 00/06/12/18 UTC + lag; Open-Meteo hourly) + failure
-      alerting — done when: a silent failure raises an alert
-      (code ready: `cron.example` + `healthcheck.py`; done once installed
-      on the deploy machine — deployment target still an open question)
+- [ ] Scheduling aligned to source rhythms (Meteocat ~14:00 local daily;
+      AEMET 00/06/12/18 UTC + lag; Open-Meteo hourly) + failure alerting
+      — done when: a silent failure raises an alert.
+      Deployment is GitHub Actions (ADR-0002): `.github/workflows/ingest.yml`
+      runs hourly, gates each leg by UTC hour, commits raw archive + SQLite
+      + HTTP cache to the `datastore` branch (auto-bootstrapped), and the
+      08 UTC healthcheck makes silent failures loud. Done once the PR
+      merges to main and `METEOCAT_API_KEY` (+ optional `ALERT_WEBHOOK_URL`)
+      are set as repo Actions secrets.
 - [ ] Start collect-forward daily ingestion of available legs — done when:
       data accumulates daily regardless of the Meteocat historics outcome
-      (Open-Meteo leg ready to run; starts accumulating once cron is live)
+      (all three legs ready; starts accumulating with the first scheduled
+      Actions runs after merge)
 
 ## Milestone 2: Full three-leg ingestion + normalization
 - [x] Run `verify_meteocat_historics.py` when credentials arrive; record the
@@ -130,9 +135,10 @@ All acceptance checks in the project brief pass.
   snow ratio)
 - Elevation semantics (canonical base/mid/top per resort)
 - Staleness/degraded-mode policy (2 of 3 legs, stale legs)
-- ~~Deployment target: VPS vs Raspberry Pi~~ RESOLVED 2026-07-12:
-  Raspberry Pi, on hold until the hardware arrives — then install
-  cron.example and off-machine backups on day 1
+- ~~Deployment target: VPS vs Raspberry Pi~~ RE-RESOLVED 2026-07-12:
+  GitHub Actions + `datastore` branch (ADR-0002) — supersedes the earlier
+  Raspberry Pi choice, which was blocked on hardware while unrecoverable
+  forecast data went uncollected. `cron.example` stays for local/manual use.
 - Verification metrics before calibration: MAE on 24h accumulation,
   hit/false-alarm on snow days, cota error in meters
 - Risk: consensus weights are prior-based and unverified — the run_time vs

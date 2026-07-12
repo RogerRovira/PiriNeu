@@ -39,7 +39,16 @@ from config import ISO_UTC, RESORTS
 
 SOURCE = "aemet"
 BUNDLE_URL = "https://www.aemet.es/es/api-eltiempo/modelos/download/harmonie/PB"
-BUNDLE_NAME = "harmonie_pb.tar"  # archived gunzipped; .gz re-added by archive
+BUNDLE_NAME = "harmonie_pb_pyrenees.tar"   # cropped bundle (the normal case)
+BUNDLE_NAME_FULL = "harmonie_pb.tar"       # fallback if crop parity fails
+
+# The full PB bundle is ~22 MB/run (~32 GB/year) — unarchivable in a git
+# datastore (ADR-0002). Before archiving, every raster is cropped to this
+# Pyrenees window (W, S, E, N — covers all three resorts, Port Ainé and
+# the surrounding ridges; ~1 MB gz/run) with tags preserved, and GeoJSONs
+# are filtered to it. The crop only replaces the full bundle after
+# decoding IDENTICAL per-resort rows from both.
+CROP_BOUNDS = (0.3, 41.9, 2.5, 43.2)
 
 # GRIB1-style field codes observed in the bundle. 207/228 CAMPO tags are
 # mislabeled upstream — keep neutral names until winter confirms semantics
@@ -177,6 +186,78 @@ def parse_aemet(payload: bytes, run_time_utc: str = "",
     return rows
 
 
+# --- Pyrenees crop (keeps the datastore small, ADR-0002) ---------------------
+
+def _crop_tif(body: bytes) -> bytes:
+    """Windowed copy of a GeoTIFF to CROP_BOUNDS, preserving the GDAL tags
+    (ESCALA is what makes the raster decodable — losing it loses the data)."""
+    from rasterio.io import MemoryFile
+    from rasterio.windows import Window, from_bounds
+
+    with MemoryFile(body) as mem, mem.open() as src:
+        raw = from_bounds(*CROP_BOUNDS, transform=src.transform)
+        # Snap outward to whole pixels: floor the start, ceil the END —
+        # flooring offsets and ceiling lengths independently can leave the
+        # last requested row/column outside the crop.
+        col0 = max(0, math.floor(raw.col_off))
+        row0 = max(0, math.floor(raw.row_off))
+        win = Window(col0, row0,
+                     min(src.width, math.ceil(raw.col_off + raw.width)) - col0,
+                     min(src.height, math.ceil(raw.row_off + raw.height)) - row0)
+        data = src.read(window=win)
+        profile = src.profile.copy()
+        for k in ("blockxsize", "blockysize", "tiled"):
+            profile.pop(k, None)
+        # Upstream files are JPEG-in-TIFF (lossy); re-encoding JPEG would
+        # shift colors and break ESCALA decoding — write lossless instead.
+        profile.update(height=data.shape[1], width=data.shape[2],
+                       transform=src.window_transform(win),
+                       compress="deflate")
+        with MemoryFile() as out:
+            with out.open(**profile) as dst:
+                dst.write(data)
+                dst.update_tags(**src.tags())
+            return out.read()
+
+
+def _filter_geojson(body: bytes) -> bytes:
+    """Keep only features with at least one vertex inside CROP_BOUNDS."""
+    w, s, e, n = CROP_BOUNDS
+
+    def any_vertex_inside(coords) -> bool:
+        if (isinstance(coords, (list, tuple)) and len(coords) >= 2
+                and all(isinstance(c, (int, float)) for c in coords[:2])):
+            return w <= coords[0] <= e and s <= coords[1] <= n
+        return any(any_vertex_inside(c) for c in coords) \
+            if isinstance(coords, (list, tuple)) else False
+
+    g = json.loads(body)
+    g["features"] = [f for f in g.get("features", [])
+                     if any_vertex_inside((f.get("geometry") or {})
+                                          .get("coordinates") or [])]
+    return json.dumps(g).encode()
+
+
+def crop_bundle(tar_bytes: bytes) -> bytes:
+    """Rebuild the tar with every member reduced to the Pyrenees window."""
+    out_buf = io.BytesIO()
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:*") as tf, \
+            tarfile.open(fileobj=out_buf, mode="w") as out:
+        for m in tf.getmembers():
+            if not m.isfile():
+                continue
+            body = tf.extractfile(m).read()
+            if m.name.lower().endswith((".tif", ".tiff")):
+                body = _crop_tif(body)
+            elif m.name.lower().endswith(".geojson"):
+                body = _filter_geojson(body)
+            info = tarfile.TarInfo(m.name)
+            info.size = len(body)
+            info.mtime = m.mtime
+            out.addfile(info, io.BytesIO(body))
+    return out_buf.getvalue()
+
+
 # --- ingestion run -----------------------------------------------------------
 
 def _derived_run_time(tar_bytes: bytes) -> Optional[str]:
@@ -215,10 +296,21 @@ def main() -> None:
         print(f"{SOURCE}: run {run_time} already ingested, skipping")
         return
 
-    path = archive_payload(SOURCE, BUNDLE_NAME, tar_bytes, fetched_at)
+    # Crop to the Pyrenees window before archiving (ADR-0002). The crop is
+    # trusted only if it decodes byte-for-byte the same per-resort rows as
+    # the full bundle; otherwise the full bundle is archived instead so no
+    # information is ever lost to a cropping bug.
     rows = parse_aemet(tar_bytes, fetched_at.strftime(ISO_UTC), BUNDLE_NAME)
+    cropped = crop_bundle(tar_bytes)
+    if sorted(parse_aemet(cropped)) == sorted(rows):
+        path = archive_payload(SOURCE, BUNDLE_NAME, cropped, fetched_at)
+    else:
+        path = archive_payload(SOURCE, BUNDLE_NAME_FULL, tar_bytes, fetched_at)
+        send_alert("aemet_ingest: cropped bundle decoded differently — "
+                   f"archived the FULL bundle at {path}; fix crop_bundle()")
     count = db.upsert_rows(conn, rows)
-    print(f"{SOURCE}: archived {path}, run {run_time}, upserted {count} rows")
+    print(f"{SOURCE}: archived {path} ({len(cropped)} bytes cropped), "
+          f"run {run_time}, upserted {count} rows")
 
 
 if __name__ == "__main__":

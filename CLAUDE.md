@@ -25,9 +25,12 @@ corrected with XEMA observations, with Alta/Mitjana/Baixa confidence labels.
 
 ## Stack
 Python 3 · SQLite long format `(station, run_time_utc, valid_time_utc,
-variable, value)` with idempotent upserts · rasterio (+ pyproj if needed)
-for AEMET rasters · cron scheduling · minimal read-only dashboard (tech
-TBD). Rationale: `docs/adr/0001-initial-stack.md` — don't repeat it here.
+variable, value)` with idempotent upserts · rasterio for AEMET rasters ·
+GitHub Actions scheduled ingestion committing to the `datastore` branch
+(raw archive + SQLite + HTTP cache; AEMET rasters cropped to the Pyrenees
+window with a decode-parity guard) · minimal read-only dashboard (tech
+TBD). Rationale: `docs/adr/0001-initial-stack.md` and
+`docs/adr/0002-github-actions-data-acquisition.md` — don't repeat them here.
 
 ## Non-goals — do NOT build these
 - GRIB2 pipelines anywhere — GeoTIFF/GeoJSON/JSON cover everything.

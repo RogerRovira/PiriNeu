@@ -111,6 +111,21 @@ def test_open_top_bin_and_color_drift():
     assert ai._rgba4((1, 2, 3)) == (1, 2, 3, 255)
 
 
+def test_crop_bundle_decodes_identically_and_shrinks_geojson():
+    full = bundle()
+    cropped = ai.crop_bundle(full)
+    assert sorted(ai.parse_aemet(cropped)) == sorted(ai.parse_aemet(full))
+    with tarfile.open(fileobj=io.BytesIO(cropped)) as tf:
+        names = set(tf.getnames())
+        # same members survive the crop
+        with tarfile.open(fileobj=io.BytesIO(full)) as orig:
+            assert names == set(orig.getnames())
+        wind = json.load(tf.extractfile(
+            "down_2026-07-12T13:00:00+00:00_direcc_viento_33.geojson"))
+    # the far-away point (-8, 38) is outside CROP_BOUNDS and dropped
+    assert [f["properties"]["ang_viento"] for f in wind["features"]] == [315]
+
+
 def test_empty_or_alien_tar_yields_no_rows():
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tf:
