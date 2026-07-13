@@ -1,28 +1,36 @@
 # Data acquisition on GitHub Actions (ADR-0002) — replaces the planned
-# Raspberry Pi + cron deployment. One hourly workflow runs every leg on its
-# own rhythm (gated by UTC hour) and commits the results to the `datastore`
-# branch: raw archive (source of truth), SQLite view, HTTP cache (protects
-# the Meteocat quota across runners) and alert log.
+# Raspberry Pi + cron deployment. One scheduled workflow runs every leg on
+# its own rhythm and commits the results to the `datastore` branch: raw
+# archive (source of truth), SQLite view, HTTP cache (protects the Meteocat
+# quota across runners) and alert log.
 #
 # Repository secrets used (Settings > Secrets and variables > Actions):
 #   METEOCAT_API_KEY   required for the Meteocat leg
 #   ALERT_WEBHOOK_URL  optional, e.g. an https://ntfy.sh/<topic> URL
 #
-# GitHub cron can fire late (typically 5-20 min); hour gates below have
-# that slack in mind. Scheduled workflows are suspended by GitHub after 60
-# days without repository activity — the datastore commits themselves count
-# as activity, but keep an eye on it if ingestion ever pauses.
+# GitHub cron is BEST-EFFORT: firings arrive late (minutes to an hour) and
+# are routinely dropped under load — observed 2026-07-13: five firings in
+# twelve hours against an hourly schedule. Which legs run is therefore
+# decided by decide_legs.py from the datastore state, never from the exact
+# firing hour, so dropped firings only delay a leg until the next one that
+# lands. Scheduled workflows are also suspended by GitHub after 60 days
+# without repository activity — the datastore commits themselves count as
+# activity, but keep an eye on it if ingestion ever pauses.
 name: ingest
 
 on:
   schedule:
-    - cron: "10 * * * *"
+    # Odd hours land ~50 min after each AEMET cycle becomes available
+    # (00/06/12/18 UTC + ~2h45m lag); :37 avoids the top-of-the-hour
+    # scheduling rush, when drops are most likely.
+    - cron: "37 1-23/2 * * *"
   workflow_dispatch:
     inputs:
       legs:
         description: >-
           Comma-separated legs to force (openmeteo,meteocat,aemet,
-          healthcheck) or "auto" for the hour-gated schedule
+          healthcheck) or "auto" for the state-based schedule
+          (decide_legs.py)
         default: auto
 
 # Serialize runs: one writer to the datastore branch at a time.
@@ -67,24 +75,15 @@ jobs:
             echo "Raw-payload archive + SQLite view (ADR-0002)." > datastore/README.md
           fi
 
-      - name: Decide which legs run this hour
+      - name: Decide which legs run this firing
         id: legs
         run: |
           set -eu
           legs="${{ github.event.inputs.legs || 'auto' }}"
           if [ "$legs" = "auto" ]; then
-            hour=$(date -u +%H)
-            legs="openmeteo"                                # source is hourly
-            case "$hour" in
-              13|14) legs="$legs,meteocat" ;;               # publishes ~14:00 local;
-            esac                                            # 2nd slot covers cron lag
-                                                            # (disk cache dedupes calls)
-            case "$hour" in
-              03|09|15|21) legs="$legs,aemet" ;;            # runs 00/06/12/18 UTC + ~2h45m lag
-            esac
-            case "$hour" in
-              08) legs="$legs,healthcheck" ;;               # daily silent-failure watchdog
-            esac
+            # Gap-tolerant gating off the datastore state (needs the
+            # datastore checkout above); survives dropped/late cron firings.
+            legs=$(python decide_legs.py)
           fi
           echo "legs=$legs" >> "$GITHUB_OUTPUT"
           echo "running: $legs"

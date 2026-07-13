@@ -11,6 +11,9 @@ RAW_DIR = DATA_DIR / "raw"          # raw-payload archive: the source of truth
 CACHE_DIR = DATA_DIR / "cache"      # HTTP disk cache (quota protection)
 LOG_DIR = DATA_DIR / "logs"
 DB_PATH = DATA_DIR / "pirineu.sqlite"  # rebuildable view of the raw archive
+# Date of the last healthcheck run — decide_legs.py schedules the watchdog
+# once per day off this marker (the check itself leaves no DB trace).
+HEALTHCHECK_MARKER = LOG_DIR / "healthcheck_last_run"
 
 # CANONICAL coordinates for ALL sources: Meteocat pics-metadades anchor
 # peaks (fetched 2026-07-12; see CLAUDE.md gotchas). Metadades carries NO
