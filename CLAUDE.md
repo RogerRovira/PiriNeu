@@ -101,4 +101,9 @@ and served by GitHub Pages. Rationale: `docs/adr/0001-initial-stack.md`,
   RGBA colormapped images, not data grids — decode values via each file's
   `ESCALA` GDAL tag (bins; alpha 0 = zero bin), and don't trust `CAMPO`
   (codes 207/228 both say "press"). Latest run only — no retention.
+- GitHub Actions cron is BEST-EFFORT: firings arrive late and are routinely
+  dropped (observed 2026-07-13: 5 firings in 12 h against an hourly
+  schedule). Never gate a leg on the exact firing hour — gate on datastore
+  state (`decide_legs.py`), so a dropped firing only delays a leg until the
+  next one that lands.
 - (Add entries here whenever an agent makes the same mistake twice.)
