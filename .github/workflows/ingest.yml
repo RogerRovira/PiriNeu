@@ -28,7 +28,7 @@ on:
     inputs:
       legs:
         description: >-
-          Comma-separated legs to force (openmeteo,meteocat,aemet,
+          Comma-separated legs to force (openmeteo,meteocat,aemet,xema,
           healthcheck) or "auto" for the state-based schedule
           (decide_legs.py)
         default: auto
@@ -106,6 +106,12 @@ jobs:
         continue-on-error: true
         run: python aemet_ingest.py
 
+      - name: XEMA leg
+        id: xema
+        if: contains(steps.legs.outputs.legs, 'xema')
+        continue-on-error: true
+        run: python xema_ingest.py
+
       - name: Healthcheck
         id: healthcheck
         if: contains(steps.legs.outputs.legs, 'healthcheck')
@@ -158,10 +164,11 @@ jobs:
           steps.openmeteo.outcome == 'failure' ||
           steps.meteocat.outcome == 'failure' ||
           steps.aemet.outcome == 'failure' ||
+          steps.xema.outcome == 'failure' ||
           steps.healthcheck.outcome == 'failure' ||
           steps.site.outcome == 'failure'
         run: |
-          echo "openmeteo=${{ steps.openmeteo.outcome }} meteocat=${{ steps.meteocat.outcome }} aemet=${{ steps.aemet.outcome }} healthcheck=${{ steps.healthcheck.outcome }} site=${{ steps.site.outcome }}"
+          echo "openmeteo=${{ steps.openmeteo.outcome }} meteocat=${{ steps.meteocat.outcome }} aemet=${{ steps.aemet.outcome }} xema=${{ steps.xema.outcome }} healthcheck=${{ steps.healthcheck.outcome }} site=${{ steps.site.outcome }}"
           exit 1
 
   # Separate job so a Pages outage can't fail or re-run ingestion. Runs

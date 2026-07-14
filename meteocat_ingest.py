@@ -3,14 +3,18 @@
 Auth: `METEOCAT_API_KEY` env var, sent as X-Api-Key — never in code, docs,
 cache entries or the archive (payload bodies carry no credentials).
 
-Quota discipline (the Predicció plan is tightly capped — see CLAUDE.md):
-- pics/metadades: 1 call, cached for a week (slugs and canonical coords
-  change essentially never)
-- zonal forecast: 1 call per target date — the endpoint returns ALL zones
-  per call, no zone parameter exists (gotcha)
-- peak forecast: 1 call per anchor peak, today only by default; set
-  METEOCAT_PICS_TOMORROW=1 to add tomorrow (3 extra calls/day)
-Default daily budget: 5 calls (+1 metadades weekly).
+Quota discipline (the Predicció plan allows 100 calls/MONTH — the original
+5-call daily schedule would have blown it around day 20; see CLAUDE.md):
+- pics/refugis metadades: 2 calls, cached for 30 days (slugs and canonical
+  coords change essentially never)
+- zonal forecast: 1 call per target date (today + tomorrow) — the endpoint
+  returns ALL zones per call, no zone parameter exists (gotcha)
+- anchor forecast: ONE anchor per day on a primary/secondary rotation
+  (anchors_for_date; each primary every 6 days, each secondary every 14).
+  METEOCAT_PICS_TOMORROW=1 adds tomorrow for the day's anchor (+1 call);
+  METEOCAT_ALL_ANCHORS=1 fetches every anchor (manual/local runs only).
+Nominal budget: 3 calls/day ≈ 92/month, leaving headroom for the bounded
+failure retries (decide_legs stops at METEOCAT_LAST_HOUR).
 
 Every payload is archived BEFORE parsing; the archive — not the parser —
 is the source of truth. Parsers follow the REAL payload shapes observed
@@ -37,18 +41,38 @@ from typing import List, Optional
 import db
 from alerting import send_alert
 from archive import archive_payload
-from config import ISO_UTC, RESORTS
+from config import ISO_UTC, METEOCAT_ANCHORS, RESORTS
 from httpcache import cached_get
 
 SOURCE = "meteocat"
 BASE = "https://api.meteo.cat"
 
-# Handoff anchor codes (codi -> station); slugs are resolved at runtime.
-ANCHOR_PEAKS = {
-    "77954ad7": "baqueira",    # Cap de Vaqueira
-    "246d5775": "boi_taull",   # Pica de Cervi
-    "4d04de5e": "la_molina",   # La Tosa d'Alp
-}
+# Anchor selection lives in config.METEOCAT_ANCHORS; slugs resolve at
+# runtime from the metadades endpoints.
+ANCHORS = {codi: {"resort": resort, "station": station, "primary": primary}
+           for codi, resort, station, primary in METEOCAT_ANCHORS}
+_PRIMARIES = [a for a in METEOCAT_ANCHORS if a[3]]
+_SECONDARIES = [a for a in METEOCAT_ANCHORS if not a[3]]
+
+
+def anchors_for_date(day) -> list:
+    """The anchors to fetch on `day` — ONE, on a quota-driven rotation.
+
+    The Predicció plan's 100 calls/month can't fund every anchor daily, so
+    even day-ordinals cycle the primaries (each every 6 days — consensus
+    keeps a recent isozero and 3000 m wind per resort, and its zonal/AROME
+    fallbacks cover the gaps) and odd ordinals cycle the secondaries (each
+    every 14 days — steady winter-verification samples). Keyed on the DATE,
+    not the firing, so same-day retries refetch the same anchor (cached)
+    and a dropped firing skips a slot instead of shifting the cycle.
+    METEOCAT_ALL_ANCHORS=1 bypasses the rotation for manual/local runs.
+    """
+    if os.environ.get("METEOCAT_ALL_ANCHORS") == "1":
+        return list(METEOCAT_ANCHORS)
+    n = day.toordinal()
+    if n % 2 == 0:
+        return [_PRIMARIES[(n // 2) % len(_PRIMARIES)]]
+    return [_SECONDARIES[(n // 2) % len(_SECONDARIES)]]
 # Zone names as served by the API on 2026-07-12 (truncated at ~25 chars BY
 # THE API — the official docs example shows the same truncation). The
 # endpoint uses its OWN 7-zone scheme, NOT the allaus/BPA zones the handoff
@@ -71,7 +95,9 @@ def zone_station(id_zona: int) -> str:
     """Pseudo-station name under which a zone's rows are stored."""
     return f"zona_{id_zona}"
 
-WEEK_SECONDS = 7 * 24 * 3600
+# Metadades cache: coords/slugs change essentially never; a monthly
+# re-check costs 2 of the 100-call budget instead of a weekly ~9.
+METADADES_TTL_SECONDS = 30 * 24 * 3600
 
 
 def _headers() -> dict:
@@ -233,21 +259,30 @@ def _parse_pic(body, run_time_utc: str, station: str,
 # --- ingestion run -----------------------------------------------------------
 
 def resolve_slugs() -> dict:
-    """codi -> {slug, kind, name, lat, lon} from the metadades endpoints."""
+    """codi -> {slug, kind, name, lat, lon} from the metadades endpoints.
+
+    Alerts on any configured anchor missing from the metadades (a codi typo
+    in config.METEOCAT_ANCHORS, or Meteocat dropped the point) — the
+    rotation then simply skips it when its day comes.
+    """
     mapping = {}
     for kind in ("pics", "refugis"):
         body = _get(f"/pronostic/v1/pirineu/{kind}/metadades",
-                    ttl_seconds=WEEK_SECONDS)
+                    ttl_seconds=METADADES_TTL_SECONDS)
         archive_payload(SOURCE, f"{kind}_metadades.json", body)
         for item in json.loads(body):
             codi = item.get("codi")
-            if codi in ANCHOR_PEAKS:
+            if codi in ANCHORS:
                 coord = item.get("coordenades") or {}
                 mapping[codi] = {
                     "slug": item.get("slug"), "kind": kind,
                     "name": item.get("descripcio"),
                     "lat": coord.get("latitud"), "lon": coord.get("longitud"),
                 }
+    for codi in set(ANCHORS) - set(mapping):
+        send_alert(f"meteocat anchor {codi} ({ANCHORS[codi]['station']}) "
+                   f"missing from pics/refugis metadades — check the codi "
+                   f"in config.METEOCAT_ANCHORS")
     return mapping
 
 
@@ -260,15 +295,17 @@ def main() -> None:
     slugs = resolve_slugs()
     by_station = {r["station"]: r for r in RESORTS}
     for codi, info in slugs.items():
-        station = ANCHOR_PEAKS[codi]
-        cfg = by_station[station]
-        # config.py holds the canonical pics-metadades coords; alert on drift
-        # (rounded to 7 decimals there, so tolerate ~a few cm).
-        if (abs(cfg["lat"] - info["lat"]) > 1e-6
-                or abs(cfg["lon"] - info["lon"]) > 1e-6):
-            send_alert(f"meteocat metadades coords for {station} drifted from "
-                       f"config.py: {info['lat']},{info['lon']} "
-                       f"vs {cfg['lat']},{cfg['lon']}")
+        station = ANCHORS[codi]["station"]
+        # config.py holds the canonical pics-metadades coords for the
+        # PRIMARY anchors (= the resorts); alert on drift (rounded to 7
+        # decimals there, so tolerate ~a few cm).
+        if ANCHORS[codi]["primary"]:
+            cfg = by_station[station]
+            if (abs(cfg["lat"] - info["lat"]) > 1e-6
+                    or abs(cfg["lon"] - info["lon"]) > 1e-6):
+                send_alert(f"meteocat metadades coords for {station} drifted "
+                           f"from config.py: {info['lat']},{info['lon']} "
+                           f"vs {cfg['lat']},{cfg['lon']}")
         print(f"  {station}: {info['name']} lat={info['lat']} "
               f"lon={info['lon']} slug={info['slug']}")
 
@@ -286,18 +323,22 @@ def main() -> None:
     pic_dates = [today]
     if os.environ.get("METEOCAT_PICS_TOMORROW") == "1":
         pic_dates.append(today + timedelta(days=1))
-    for codi, info in slugs.items():
+    pic_calls = 0
+    for codi, _resort, station, _primary in anchors_for_date(today):
+        info = slugs.get(codi)
+        if info is None:
+            continue  # missing from metadades — resolve_slugs alerted
         for d in pic_dates:
-            station = ANCHOR_PEAKS[codi]
             name = f"pic_{station}_{d.isoformat()}.json"
             body = _get(f"/pronostic/v1/pirineu/{info['kind']}/{info['slug']}"
                         f"/{d.year}/{d.month:02d}/{d.day:02d}")
             archive_payload(SOURCE, name, body, fetched_at)
             rows.extend(_parse_pic(json.loads(body), run_time, station,
                                    d.isoformat()))
+            pic_calls += 1
 
     count = db.upsert_rows(db.connect(), rows)
-    print(f"{SOURCE}: archived {2 + len(zone_dates) + len(slugs) * len(pic_dates)}"
+    print(f"{SOURCE}: archived {2 + len(zone_dates) + pic_calls}"
           f" payloads, upserted {count} rows")
 
 

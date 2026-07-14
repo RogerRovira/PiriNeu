@@ -9,7 +9,13 @@ corrected with XEMA observations, with Alta/Mitjana/Baixa confidence labels.
 - Setup: `pip install -r requirements.txt`
 - Ingest Open-Meteo leg: `python openmeteo_ingest.py`
 - Ingest Meteocat leg: `python meteocat_ingest.py` (requires `METEOCAT_API_KEY`;
-  ~5 calls/day — quota-guarded; `METEOCAT_PICS_TOMORROW=1` adds 3)
+  3 calls/day — 2 zone dates + ONE rotating anchor; `METEOCAT_ALL_ANCHORS=1`
+  fetches all 10 anchors, `METEOCAT_PICS_TOMORROW=1` adds tomorrow's pic)
+- XEMA reconnaissance (pre-nowcast): `python xema_recon.py` (requires
+  `METEOCAT_API_KEY`; ~15 calls of the XEMA plan on first run)
+- Ingest XEMA observations: `python xema_ingest.py` (requires
+  `METEOCAT_API_KEY`; 6 calls/cycle + morning backfill, gated by
+  decide_legs at >8h staleness — XEMA plan: 750 calls/month)
 - Rebuild SQLite from the raw archive: `python rebuild_db.py [--db PATH]`
 - Silent-failure watchdog: `python healthcheck.py` (alerts and exits 1 on stale data)
 - Test the alert webhook: `python alerting.py "message"` (uses `ALERT_WEBHOOK_URL`)
@@ -89,6 +95,12 @@ and served by GitHub Pages. Rationale: `docs/adr/0001-initial-stack.md`,
   pseudo-stations) and the resort→zone choice lives in
   `config.METEOCAT_ZONE_FOR_STATION` — change the config, never the
   parser, and run `verify_meteocat_zones.py` before trusting it.
+- Meteocat quotas are per PLAN on the same key: **Predicció (pronostic
+  endpoints) = 100 calls/month**, XEMA = 750/month. The original 5-call/day
+  pronostic schedule would have exhausted Predicció around day 20 — hence
+  the one-anchor-per-day rotation (`anchors_for_date`) and 30-day metadades
+  cache. Never add a recurring pronostic call without redoing the monthly
+  budget (nominal is ~92/100 including bounded failure retries).
 - meteo.cat, apidocs.meteocat.gencat.cat and SMC-adjacent sites are
   unreachable from this dev environment (WAF blocks non-browser agents);
   only api.meteo.cat works. Don't burn time retrying them.

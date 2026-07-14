@@ -25,10 +25,15 @@ AEMET_PUBLICATION_LAG = timedelta(hours=2, minutes=45)
 
 # Meteocat publishes once a day, ~14:00 local (12:00/13:00 UTC by DST) —
 # gate at 13 UTC so it covers both. Retries stop at LAST_HOUR: every
-# attempt costs ~5 calls of a tightly capped quota, so a dead-API day
+# attempt costs ~3 calls of a tightly capped quota, so a dead-API day
 # burns a bounded number of attempts instead of retrying until midnight.
 METEOCAT_PUBLISH_HOUR = 13
 METEOCAT_LAST_HOUR = 21
+
+# XEMA observations refresh semi-hourly upstream, but the plan's 750
+# calls/month fund ~3 six-call cycles a day: refetch once the newest
+# stored READING (xema run_time == reading time) is over 8h old.
+XEMA_STALE_HOURS = 8
 
 HEALTHCHECK_HOUR = 8  # daily watchdog, after the overnight ingest slots
 
@@ -63,6 +68,19 @@ def decide(now: datetime, conn, healthcheck_ran: str = "") -> List[str]:
     # same one, so firing while publication is late costs one download only.
     if (latest_run(conn, "aemet") or "") < aemet_expected_run(now):
         legs.append("aemet")
+
+    # XEMA rows store the reading's own time as run_time, so the newest
+    # run IS the newest observation; refetch when it goes stale. The
+    # timestamp comes from the payload ("2026-07-13T17:00Z"), hence
+    # fromisoformat rather than a fixed format.
+    newest_obs = latest_run(conn, "xema")
+    try:
+        obs_at = datetime.fromisoformat(
+            (newest_obs or "").replace("Z", "+00:00"))
+    except ValueError:
+        obs_at = None
+    if obs_at is None or now - obs_at > timedelta(hours=XEMA_STALE_HOURS):
+        legs.append("xema")
 
     if now.hour >= HEALTHCHECK_HOUR and healthcheck_ran != f"{now:%Y-%m-%d}":
         legs.append("healthcheck")

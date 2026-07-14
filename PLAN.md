@@ -91,8 +91,22 @@ All acceptance checks in the project brief pass.
       Meteocat (~100–200 m on storm days) needs winter data — the stored
       `leg.*.cota_m` rows accumulate exactly that comparison.
 - [ ] XEMA nowcast correction (mind Meteocat quota — polling multiplies
-      calls) — blocked on XEMA station selection (open question below);
-      last remaining v1 feature.
+      calls; the XEMA plan allows 750/month, ~25/day) — station selection
+      RESOLVED 2026-07-13 (high+valley pair per resort, config.XEMA_STATIONS).
+      Recon DONE 2026-07-13 (`xema_recon.py`, data/xema_recon_report.json):
+      all six stations live on the station-day endpoint, semi-hourly
+      readings, ~43 min latency; temperature(32)/humidity(33)/precip(35)/
+      snow-depth(38) available — EXCEPT la Tosa d'Alp [ZD], which has no
+      gauge or snow sensor (la_molina precip/snow obs come from Das [DP]).
+      Ingest leg DONE 2026-07-14 (`xema_ingest.py`: run_time == reading
+      time so refetches are idempotent; 6 calls/cycle gated at >8h
+      staleness ≈ 570 calls/month; morning backfill closes the overnight
+      gap). REMAINING: the correction itself in consensus.py. Design
+      notes: use the pair's observed lapse rate for the freezing level,
+      but detect valley temperature inversions (Das sits in the Cerdanya
+      cold pool) and fall back to the high station + standard lapse rate;
+      snow-depth deltas at Z1/Z2/YN/DP are the new-snow ground truth.
+      Last remaining v1 feature.
 - [x] Read-only dashboard with snow, cota, confidence and attributions
       (`dashboard.py`, static HTML per ADR-0003, deployed to GitHub Pages
       by the ingest workflow). Live once Pages is enabled in repo settings
@@ -140,7 +154,18 @@ All acceptance checks in the project brief pass.
   (WAF). All zones are stored, so this costs nothing while open; resolve
   with `verify_meteocat_zones.py` on winter data, or by checking the zone
   map at meteo.cat/prediccio/pirineu from a browser.
-- XEMA station selection per resort + gauge undercatch handling (20–50%)
+- ~~XEMA station selection per resort~~ RESOLVED 2026-07-13: a HIGH +
+  VALLEY pair per resort so the observed lapse rate (and hence freezing
+  level) is derivable from the pair — baqueira: Bonaigua [Z1] 2262 m +
+  Vielha-Elipòrt [YN] 1029 m; boi_taull: Boí [Z2] 2537 m + el Pont de
+  Suert [CT] 824 m; la_molina: la Tosa d'Alp [ZD] 2478 m + Das-Aeròdrom
+  [DP] 1096 m (`config.XEMA_STATIONS`). Gauge undercatch handling
+  (20–50%) still open.
+- Meteocat Predicció budget REWORKED 2026-07-13: the plan allows only
+  100 calls/month, so pics anchors (expanded 3 → 10 pics/refugis per the
+  thermal-anchor selection) rotate at ONE call/day — primaries every 6
+  days, secondaries every 14 — and metadades caches for 30 days:
+  ~92 calls/month nominal vs ~159 before.
 - Semantic normalization spec (SWE mm proposal, windows, bucket mapping,
   snow ratio)
 - Elevation semantics (canonical base/mid/top per resort)

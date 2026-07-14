@@ -28,6 +28,61 @@ RESORTS = (
     {"station": "la_molina", "lat": 42.3205751, "lon": 1.8926609, "elevation_m": 2526},
 )
 
+# Meteocat pronostic anchor points (pics + refugis): forecast points whose
+# isozero/upper-wind tracks each resort's massif. The PRIMARY anchor per
+# resort is stored under the resort's own station name (its metadades
+# coords ARE the canonical RESORTS coords above; consensus reads
+# pic.isozero.totes / pic.direccio_vent.3000 under the resort station).
+# Secondary anchors (selection 2026-07-13) store under their own station
+# names — extra isozero coverage for winter verification. The Predicció
+# plan allows only 100 calls/month, so ingest fetches ONE anchor per day
+# on a primary/secondary rotation (meteocat_ingest.anchors_for_date).
+METEOCAT_ANCHORS = (
+    # (codi, resort, station, primary)
+    ("77954ad7", "baqueira", "baqueira", True),       # Cap de Vaquèira
+    ("962535ca", "baqueira", "marimanya", False),     # Tuc de Marimanya
+    ("b65b37e8", "baqueira", "airoto", False),        # Airoto
+    ("8245e5c9", "baqueira", "gerdar", False),        # Refugi del Gerdar
+    ("246d5775", "boi_taull", "boi_taull", True),     # Pica de Cerví
+    ("6e5cedc5", "boi_taull", "filia", False),        # Pic de Filià
+    ("a4d20c1f", "boi_taull", "corronco", False),     # Lo Corronco
+    ("4d04de5e", "la_molina", "la_molina", True),     # La Tosa d'Alp
+    ("5bb98db1", "la_molina", "puigllancada", False), # Puigllançada
+    ("a9f7eb3a", "la_molina", "pere_carne", False),   # Xalet-Refugi Pere Carné
+)
+
+# XEMA observation stations — nowcast ground truth (XEMA plan: 750
+# calls/month on the same key, ~25/day: comfortable for 6 stations).
+# Chosen 2026-07-13: a HIGH + VALLEY pair per resort, so the two observed
+# temperatures bracket the profile and the freezing level can be derived
+# from the measured lapse rate instead of an assumed one. Boí and la Tosa
+# d'Alp sit inside their resorts; Bonaigua is on Baqueira's pass.
+# CAVEAT: Das - Aeròdrom sits in the Cerdanya cold pool — on inversion
+# nights its reading is anomalously cold and the pair-derived lapse rate
+# is invalid (nowcast must detect inversions and fall back to the high
+# station alone). Berguedà-side alternate if DP proves unusable:
+# Castellar de n'Hug - el Clot del Moro [MS], 42.25943, 1.97610, 940 m.
+XEMA_STATIONS = (
+    {"code": "Z1", "resort": "baqueira", "role": "high",
+     "name": "Bonaigua", "lat": 42.64691, "lon": 0.98486,
+     "elevation_m": 2262},
+    {"code": "YN", "resort": "baqueira", "role": "valley",
+     "name": "Vielha - Elipòrt", "lat": 42.69737, "lon": 0.80197,
+     "elevation_m": 1029},
+    {"code": "Z2", "resort": "boi_taull", "role": "high",
+     "name": "Boí", "lat": 42.46603, "lon": 0.88403,
+     "elevation_m": 2537},
+    {"code": "CT", "resort": "boi_taull", "role": "valley",
+     "name": "el Pont de Suert", "lat": 42.39809, "lon": 0.74364,
+     "elevation_m": 824},
+    {"code": "ZD", "resort": "la_molina", "role": "high",
+     "name": "la Tosa d'Alp", "lat": 42.32213, "lon": 1.89716,
+     "elevation_m": 2478},
+    {"code": "DP", "resort": "la_molina", "role": "valley",
+     "name": "Das - Aeròdrom", "lat": 42.38603, "lon": 1.86639,
+     "elevation_m": 1096},
+)
+
 # Which Meteocat Pirineu forecast zone represents each resort. Zonal rows
 # are stored per-zone (station `zona_<id>`, see meteocat_ingest.py), so this
 # assignment is pure interpretation: revising it needs no re-ingest.

@@ -17,12 +17,15 @@ from meteocat_ingest import SOURCE as METEOCAT_SOURCE
 from meteocat_ingest import parse_meteocat
 from openmeteo_ingest import SOURCE as OPENMETEO_SOURCE
 from openmeteo_ingest import parse_openmeteo
+from xema_ingest import SOURCE as XEMA_SOURCE
+from xema_ingest import parse_xema
 
 # One entry per ingestion leg: fn(payload, run_time_utc, archive_name).
 PARSERS = {
     OPENMETEO_SOURCE: lambda raw, run, name: parse_openmeteo(raw, run),
     METEOCAT_SOURCE: parse_meteocat,
     AEMET_SOURCE: parse_aemet,
+    XEMA_SOURCE: parse_xema,
 }
 
 

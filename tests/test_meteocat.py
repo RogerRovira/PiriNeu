@@ -101,6 +101,44 @@ def test_configured_zones_exist_in_the_observed_scheme():
         assert zone_id in mc.EXPECTED_ZONE_NAMES
 
 
+def test_anchor_config_is_coherent():
+    from config import METEOCAT_ANCHORS, RESORTS
+    resorts = {r["station"] for r in RESORTS}
+    stations = [a[2] for a in METEOCAT_ANCHORS]
+    assert len(stations) == len(set(stations))  # one station name per anchor
+    codis = [a[0] for a in METEOCAT_ANCHORS]
+    assert len(codis) == len(set(codis))
+    # exactly one primary per resort, stored under the resort's own name
+    # (consensus reads pic.* under the resort station)
+    primaries = {a[1]: a[2] for a in METEOCAT_ANCHORS if a[3]}
+    assert primaries == {r: r for r in resorts}
+    assert {a[1] for a in METEOCAT_ANCHORS} == resorts
+
+
+def test_anchor_rotation_spends_one_call_a_day_and_covers_everything():
+    import datetime
+    from config import METEOCAT_ANCHORS
+    start = datetime.date(2026, 11, 1)
+    days = [start + datetime.timedelta(days=i) for i in range(42)]
+    picks = [mc.anchors_for_date(d) for d in days]
+    assert all(len(p) == 1 for p in picks)  # 1 anchor call/day
+    # every anchor comes up within a 6/14-day cycle pair
+    assert {p[0] for p in picks} == set(METEOCAT_ANCHORS)
+    # primaries on even ordinals: each resort sampled every 6 days
+    for d, (anchor,) in zip(days, picks):
+        assert anchor[3] == (d.toordinal() % 2 == 0)
+    # deterministic: same date -> same anchor (retries refetch, cached)
+    assert mc.anchors_for_date(start) == mc.anchors_for_date(start)
+
+
+def test_all_anchors_env_bypasses_the_rotation(monkeypatch):
+    import datetime
+    from config import METEOCAT_ANCHORS
+    monkeypatch.setenv("METEOCAT_ALL_ANCHORS", "1")
+    assert mc.anchors_for_date(datetime.date(2026, 11, 1)) == \
+        list(METEOCAT_ANCHORS)
+
+
 def test_franja_window_falls_back_to_idTipusFranja():
     assert mc._franja_window({"nom": "12:00h - 18:00h"}) == (12, 6)
     assert mc._franja_window({"nom": "24h"}) == (0, 24)
@@ -126,6 +164,10 @@ def test_dispatch_handles_archive_filenames_and_metadata():
     stamped_pic = "20260712T133000Z_pic_baqueira_2026-07-13.json.gz"
     rows = mc.parse_meteocat(pic_payload(), RUN, stamped_pic)
     assert rows and all(r[1] == "baqueira" for r in rows)
+    # secondary anchors store under their own station names
+    rows = mc.parse_meteocat(pic_payload(), RUN,
+                             "pic_pere_carne_2026-07-13.json")
+    assert rows and all(r[1] == "pere_carne" for r in rows)
     assert mc.parse_meteocat(b"[]", RUN, "pics_metadades.json") == []
     assert mc.parse_meteocat(b"[]", RUN,
                              "20260712T133000Z_refugis_metadades.json.gz") == []

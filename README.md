@@ -21,6 +21,7 @@ pip install -r requirements.txt
 python openmeteo_ingest.py     # Open-Meteo/AROME leg (archives raw first)
 python meteocat_ingest.py      # Meteocat leg (needs METEOCAT_API_KEY)
 python aemet_ingest.py         # AEMET Harmonie leg (latest run only)
+python xema_ingest.py          # XEMA observations (needs METEOCAT_API_KEY)
 python rebuild_db.py           # prove SQLite rebuilds from the raw archive
 pytest                         # run the test suite
 ```

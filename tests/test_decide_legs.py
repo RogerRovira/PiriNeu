@@ -18,9 +18,11 @@ def conn_with(tmp_path, *runs):
 
 
 def test_openmeteo_runs_on_every_firing(tmp_path):
-    # AEMET is up to date (18 UTC cycle of the day before), so at 01 UTC
-    # nothing but the always-on Open-Meteo leg is due.
-    conn = conn_with(tmp_path, ("aemet", "2026-07-12T18:00:00Z"))
+    # AEMET is up to date (18 UTC cycle of the day before) and XEMA
+    # observations are fresh, so at 01 UTC nothing but the always-on
+    # Open-Meteo leg is due.
+    conn = conn_with(tmp_path, ("aemet", "2026-07-12T18:00:00Z"),
+                     ("xema", "2026-07-13T01:00Z"))
     assert decide_legs.decide(at(1), conn) == ["openmeteo"]
 
 
@@ -55,6 +57,19 @@ def test_meteocat_runs_once_per_day(tmp_path):
     conn = conn_with(tmp_path, ("meteocat", "2026-07-13T13:40:00Z"))
     assert "meteocat" not in decide_legs.decide(at(15), conn)
     assert "meteocat" in decide_legs.decide(at(13, day=14), conn)
+
+
+def test_xema_runs_when_observations_go_stale(tmp_path):
+    # empty DB: observations are due immediately
+    assert "xema" in decide_legs.decide(at(1), conn_with(tmp_path))
+    # newest reading 01:00, firing 03:37 -> fresh (< 8h)
+    conn = conn_with(tmp_path, ("xema", "2026-07-13T01:00Z"))
+    assert "xema" not in decide_legs.decide(at(3), conn)
+    # same reading at 09:37 -> 8h37m stale -> due again
+    assert "xema" in decide_legs.decide(at(9), conn)
+    # malformed timestamp never wedges the leg shut
+    conn = conn_with(tmp_path, ("xema", "not-a-time"))
+    assert "xema" in decide_legs.decide(at(3), conn)
 
 
 def test_healthcheck_runs_once_per_day_after_eight(tmp_path):
