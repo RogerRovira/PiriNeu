@@ -4,9 +4,7 @@ Status: written 2026-07-16 (pre-first-winter). Audience: project maintainer.
 Scope: (1) a complete inventory of the data currently feeding the 48h
 snow/cota consensus, (2) data already ingested or archived but not yet used,
 (3) data available upstream but not fetched, and (4) extra computation or
-frameworks that would raise skill without violating the project's non-goals
-(no GRIB2, no snowpack modeling, no ground snow-depth prediction, no
-Open-Meteo `precipitation_probability`, non-commercial only).
+frameworks that would raise skill
 
 ---
 
