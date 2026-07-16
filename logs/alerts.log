@@ -29,3 +29,5 @@
 2026-07-16T04:43:03Z xema_ingest failed: METEOCAT_API_KEY not set
 2026-07-16T07:37:26Z xema_ingest failed: METEOCAT_API_KEY not set
 2026-07-16T11:20:14Z xema_ingest failed: METEOCAT_API_KEY not set
+2026-07-16T13:04:45Z meteocat_ingest failed: METEOCAT_API_KEY not set
+2026-07-16T13:04:45Z xema_ingest failed: METEOCAT_API_KEY not set
